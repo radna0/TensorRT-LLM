@@ -24,6 +24,7 @@ from ...layers import (MOE, Attention, AttentionMaskType, ColumnLinear,
 from ...mapping import Mapping
 from ...module import Module
 from ...parameter import Parameter
+from ...quantization import QuantMode
 from ..convert_utils import has_safetensors
 from ..modeling_utils import (DecoderLayerList, DecoderModelForCausalLM,
                               QuantConfig)
@@ -44,6 +45,11 @@ class GptOssDecoderLayer(Module):
 
         layers_range = config.mapping.pp_layers(config.num_hidden_layers)
         local_layer_idx = layer_idx - layers_range[0]
+        attention_quant_mode = config.quant_mode
+        attn_name = f"transformer.layers.{layer_idx}.attention"
+        if config.quantization.is_module_excluded_from_quantization(attn_name):
+            attention_quant_mode = QuantMode.from_quant_algo(
+                None, config.quantization.kv_cache_quant_algo)
         self.attention = Attention(
             local_layer_idx=local_layer_idx,
             hidden_size=config.hidden_size,
@@ -60,7 +66,7 @@ class GptOssDecoderLayer(Module):
             tp_group=config.mapping.tp_group,
             tp_size=config.mapping.tp_size,
             tp_rank=config.mapping.tp_rank,
-            quant_mode=config.quant_mode,
+            quant_mode=attention_quant_mode,
             cp_group=config.mapping.cp_group,
             cp_size=config.mapping.cp_size,
             cp_rank=config.mapping.cp_rank)

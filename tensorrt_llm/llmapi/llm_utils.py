@@ -418,8 +418,11 @@ class ModelLoader:
                     quant_config.exclude_modules = ["*eh_proj"]
                 elif hf_quant_config.get("quant_method") == "mxfp4":
                     from .._torch.model_config import ModelConfig
+                    moe_config = getattr(self.llm_args, "moe_config", None)
+                    moe_backend = getattr(moe_config, "backend",
+                                          "TRTLLM") if moe_config else "TRTLLM"
                     quant_config.quant_algo = ModelConfig.get_mxfp4_quant_algo(
-                        self.llm_args.moe_config.backend)
+                        moe_backend)
                     quant_config.group_size = 32
                     quant_config.exclude_modules = [
                         'block.*.attn.out', 'block.*.mlp.gate',

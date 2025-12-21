@@ -27,6 +27,7 @@ from tensorrt_llm.layers.lora import LoraParams
 
 from .._common import default_net, default_trtnet
 from .._utils import QuantModeWrapper, get_sm_version, int32_array
+from ..math_utils import pad_up
 from ..functional import (AllReduceParams, SideStreamIDType, Tensor,
                           _add_plugin_info, _create_tensor, abs, allreduce,
                           cast, concat, constant, cuda_stream_sync, div, expand,
@@ -499,9 +500,10 @@ class MOEWeightWrapper(Module):
             self.weights_scaling_factor = Parameter(shape=(experts_per_node, 1),
                                                     dtype=trt.float32)
         elif quant_mode.has_nvfp4() or quant_mode.has_mxfp4():
+            scale_rows = pad_up(out_features, 128)
+            scale_cols = pad_up(in_features // self.scaling_vector_size, 4)
             self.weights_block_scaling_factor_interleaved = Parameter(
-                shape=(experts_per_node, out_features,
-                       in_features // self.scaling_vector_size),
+                shape=(experts_per_node, scale_rows, scale_cols),
                 dtype=trt.fp8)
             self.weights_block_scaling_factor = Parameter(
                 shape=(experts_per_node, out_features,
@@ -724,10 +726,18 @@ class MOEWeightWrapper(Module):
             weights = stack_weights(tllm_key, weights)
         if tllm_key.endswith("weights_block_scaling_factor_interleaved"):
             weights = stack_weights(tllm_key, weights)
+            rows = weights.shape[-2]
+            cols = weights.shape[-1]
+            rows_padded = pad_up(rows, 128)
+            cols_padded = pad_up(cols, 4)
+            if weights.dim() == 3:
+                out_shape = (weights.shape[0], rows_padded, cols_padded)
+            else:
+                out_shape = (rows_padded, cols_padded)
             weights = torch.ops.trtllm.block_scale_interleave(
                 weights.to(torch.float8_e4m3fn).view(
-                    torch.uint8).cpu().contiguous()).reshape(
-                        weights.shape).view(torch.float8_e4m3fn)
+                    torch.uint8).cpu().contiguous()).view(
+                        torch.float8_e4m3fn).reshape(out_shape)
         if tllm_key.endswith("activation_global_scaling_factor"):
             # Use max input range.
             weights = max(weights).float().reshape((1, ))

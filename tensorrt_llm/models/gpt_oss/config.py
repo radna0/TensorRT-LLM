@@ -22,6 +22,38 @@ from ..convert_utils import infer_dtype
 from ..modeling_utils import PretrainedConfig, QuantConfig
 
 
+def _extend_exclude_modules(quant_config: QuantConfig,
+                            hf_quant_config: Optional[dict]) -> None:
+    if quant_config is None:
+        return
+    exclude_modules = list(quant_config.exclude_modules or [])
+    if isinstance(hf_quant_config, dict):
+        modules_to_not_convert = hf_quant_config.get("modules_to_not_convert")
+        if isinstance(modules_to_not_convert, list):
+            exclude_modules.extend(modules_to_not_convert)
+    if not exclude_modules:
+        return
+    trt_exclude = []
+    for name in exclude_modules:
+        if not isinstance(name, str):
+            continue
+        lowered = name.lower()
+        if "self_attn" in lowered or "attn" in lowered:
+            trt_exclude.append("transformer.layers.*.attention")
+        if "attn.qkv" in lowered or "qkv" in lowered or "q_proj" in lowered:
+            trt_exclude.append("transformer.layers.*.attention.qkv")
+        if "attn.out" in lowered or "o_proj" in lowered:
+            trt_exclude.append("transformer.layers.*.attention.dense")
+        if "mlp.router" in lowered or "router" in lowered:
+            trt_exclude.append("transformer.layers.*.mlp.router")
+        if "embed_tokens" in lowered or "embedding" in lowered:
+            trt_exclude.append("transformer.vocab_embedding")
+        if "lm_head" in lowered or "unembedding" in lowered:
+            trt_exclude.append("lm_head")
+    quant_config.exclude_modules = sorted(
+        set(exclude_modules + trt_exclude))
+
+
 class GptOssConfig(PretrainedConfig):
 
     def __init__(
@@ -150,8 +182,8 @@ class GptOssConfig(PretrainedConfig):
             RENORMALIZE)
         moe_config.validate()
 
+        hf_quant_config = getattr(hf_config, 'quantization_config', None)
         if quant_config is None:
-            hf_quant_config = getattr(hf_config, 'quantization_config', None)
             if isinstance(hf_quant_config, dict):
                 quant_method = hf_quant_config.get('quant_method', None)
                 quant_algo_name = hf_quant_config.get(
@@ -184,7 +216,12 @@ class GptOssConfig(PretrainedConfig):
                             quant_algo=quant_algo,
                             kv_cache_quant_algo=kv_cache_algo)
 
-        dtype = infer_dtype(dtype, getattr(hf_config, 'torch_dtype', None))
+        _extend_exclude_modules(quant_config, hf_quant_config)
+
+        source_dtype = getattr(hf_config, 'torch_dtype', None)
+        if dtype == 'auto':
+            source_dtype = 'bfloat16'
+        dtype = infer_dtype(dtype, source_dtype)
         tie_word_embeddings = getattr(hf_config, 'tie_word_embeddings', False)
 
         layer_types = ['attention'] * hf_config.num_hidden_layers

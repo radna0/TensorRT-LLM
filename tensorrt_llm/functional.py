@@ -6618,6 +6618,7 @@ ACT2FN = {
     'squared-relu': squared_relu,
     'swiglu': swiglu,
     'fast-swiglu': swiglu,
+    'swiglu_bias': swiglu,
     'sigmoid': sigmoid,
     'quick_gelu': quick_gelu,
 }
@@ -6625,6 +6626,7 @@ ACT2FN = {
 GATED_ACT_2_ACT = {
     'swiglu': 'silu',
     'fast-swiglu': 'silu',
+    'swiglu_bias': 'silu',
     'geglu': 'gelu',
 }
 

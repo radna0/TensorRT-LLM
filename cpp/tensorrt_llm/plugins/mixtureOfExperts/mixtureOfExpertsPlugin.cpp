@@ -740,13 +740,19 @@ QuantParams tensorrt_llm::plugins::MixtureOfExpertsPlugin::getQuantParams(nvinfe
             ? TmaWarpSpecializedGroupedGemmInput::MXFPXBlockScaleVectorSize
             : TmaWarpSpecializedGroupedGemmInput::NVFP4BlockScaleVectorSize;
 
-        TLLM_CHECK_WITH_INFO(desc_2->dims.d[0] == experts_per_node && desc_2->dims.d[1] == gated_inter_size
-                && desc_2->dims.d[2] == mExpertHiddenSize / block_scale_vec_size,
+        auto const pad_up = [](int x, int m) { return (x + m - 1) / m * m; };
+        int const fc_rows = pad_up(gated_inter_size, 128);
+        int const fc_cols = pad_up(mExpertHiddenSize / block_scale_vec_size, 4);
+        int const proj_rows = pad_up(mExpertHiddenSize, 128);
+        int const proj_cols = pad_up(mExpertInterSize / block_scale_vec_size, 4);
+
+        TLLM_CHECK_WITH_INFO(desc_2->dims.d[0] == experts_per_node && desc_2->dims.d[1] == fc_rows
+                && desc_2->dims.d[2] == fc_cols,
             "Incorrect shape for FP4 scale");
         TLLM_CHECK_WITH_INFO(desc_3->dims.d[0] == experts_per_node, "Incorrect shape for FP4 scale");
         TLLM_CHECK(desc_4->dims.d[0] == 1);
-        TLLM_CHECK_WITH_INFO(desc_5->dims.d[0] == experts_per_node && desc_5->dims.d[1] == mExpertHiddenSize
-                && desc_5->dims.d[2] == mExpertInterSize / block_scale_vec_size,
+        TLLM_CHECK_WITH_INFO(desc_5->dims.d[0] == experts_per_node && desc_5->dims.d[1] == proj_rows
+                && desc_5->dims.d[2] == proj_cols,
             "Incorrect shape for FP4 scale");
         TLLM_CHECK_WITH_INFO(desc_6->dims.d[0] == experts_per_node, "Incorrect shape for FP4 scale");
 

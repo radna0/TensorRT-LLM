@@ -22,6 +22,7 @@ import safetensors
 import torch
 
 from ..._utils import pad_vocab_size, str_dtype_to_torch
+from ...math_utils import pad_up
 from ...logger import logger
 from ..convert_utils import split
 from .config import GptOssConfig
@@ -31,7 +32,15 @@ def _block_scale_interleave(scales: torch.Tensor) -> torch.Tensor:
     scales_cpu = scales.detach().cpu().contiguous()
     interleaved = torch.ops.trtllm.block_scale_interleave(
         scales_cpu.view(torch.uint8))
-    interleaved = interleaved.view(scales_cpu.dtype).reshape(scales_cpu.shape)
+    rows = scales_cpu.shape[-2]
+    cols = scales_cpu.shape[-1]
+    rows_padded = pad_up(rows, 128)
+    cols_padded = pad_up(cols, 4)
+    if scales_cpu.dim() == 3:
+        out_shape = (scales_cpu.shape[0], rows_padded, cols_padded)
+    else:
+        out_shape = (rows_padded, cols_padded)
+    interleaved = interleaved.view(scales_cpu.dtype).reshape(out_shape)
     return interleaved
 
 
