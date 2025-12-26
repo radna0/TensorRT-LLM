@@ -1371,20 +1371,40 @@ def test_fused_moe_fp8_blockwise_cute_dsl_multi_gpu(ep_size, routing_method,
             assert r is True
 
 
-def run_fused_moe_nvfp4(dtype,
-                        moe_backend,
-                        hidden_size=512,
-                        intermediate_size=512,
-                        num_experts=8,
-                        top_k=2,
-                        seq_len=4,
-                        gptoss_style=False,
-                        swiglu_alpha=None,
-                        swiglu_beta=None,
-                        swiglu_limit=None):
+@skip_pre_blackwell
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("moe_backend", [
+    pytest.param("TRTLLM", marks=skip_blackwell_geforce), "CUTLASS", "CUTEDSL"
+])
+@pytest.mark.parametrize(
+    "finalize_fusion", [True, False],
+    ids=["enable_finalize_fusion", "disable_finalize_fusion"])
+@pytest.mark.parametrize("enable_configurable_moe", [0, 1],
+                         ids=lambda x: ""
+                         if x == 0 else "enable_configurable_moe")
+def test_fused_moe_nvfp4(dtype, moe_backend, finalize_fusion,
+                         enable_configurable_moe, mocker):
 
-    if moe_backend == "TRTLLM" and dtype == torch.float16:
-        pytest.skip("TRTLLM NVFP4 MoE backend does not support float16 yet")
+    if enable_configurable_moe == 1 and moe_backend not in [
+            "TRTLLM", "CUTLASS"
+    ]:
+        pytest.skip(
+            "ENABLE_CONFIGURABLE_MOE=1, only TRTLLM and CUTLASS backend are enabled"
+        )
+
+    mocker.patch.dict(
+        os.environ, {
+            "ENABLE_CONFIGURABLE_MOE":
+            "1" if enable_configurable_moe == 1
+            and moe_backend in ["TRTLLM", "CUTLASS"] else "0"
+        })
+
+    if moe_backend == "TRTLLM":
+        if dtype == torch.float16:
+            pytest.skip("TRTLLM NVFP4 MoE backend does not support float16 yet")
+        if finalize_fusion:
+            pytest.skip(
+                "TRTLLM NVFP4 MoE backend does not support fused finalize yet")
     if moe_backend == "CUTEDSL":
         if dtype == torch.float16:
             pytest.skip(

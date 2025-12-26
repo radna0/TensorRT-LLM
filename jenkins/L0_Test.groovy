@@ -1058,12 +1058,31 @@ def runLLMTestlistWithSbatch(pipeline, platform, testList, config=VANILLA_CONFIG
                     """.replaceAll("(?m)^\\s*", "")
                 }
 
+                // Define environment variables to export
+                def envVarNames = [
+                    'OPEN_SEARCH_DB_BASE_URL',
+                    'OPEN_SEARCH_DB_CREDENTIALS',
+                    'BUILD_ID',
+                    'BUILD_URL',
+                    'JOB_NAME',
+                    'globalVars',
+                    'gitlabCommit'
+                ]
+                def envVarsToExport = [:]
+                envVarNames.each { varName ->
+                    envVarsToExport[varName] = env."${varName}"
+                }
+
                 srunArgs = [
+                    "--container-name=multi_node_test-\${SLURM_JOB_ID}",
                     "--container-image=$containerImageArg",
                     "--container-workdir=/home/svc_tensorrt/bloom/scripts",
                     "--container-mounts=$mounts",
                     "--container-env=NVIDIA_IMEX_CHANNELS"
                 ]
+                envVarsToExport.each { varName, varValue ->
+                    srunArgs.add("--container-env=${varName}")
+                }
                 if(nodeCount > 1) {
                     srunArgs.add("--mpi=pmi2")
                 }
@@ -1072,6 +1091,17 @@ def runLLMTestlistWithSbatch(pipeline, platform, testList, config=VANILLA_CONFIG
                 if (cluster.host.contains("oci-nrt") || cluster.host.contains("oci-hsg") || cluster.host.contains("lbd-lax")) {
                     exemptionComment = """--comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"90","reason":"other","description":"Long data and model loading time and disaggregated serving tests"}}'"""
                 }
+
+                def envExportStatements = envVarsToExport.collect { varName, varValue ->
+                    def escapedValue = varValue?.toString() ?: ''
+                    escapedValue = escapedValue
+                        .replace('\\', '\\\\')    // Backslash
+                        .replace('"', '\\"')      // Double quote
+                        .replace('$', '\\$')      // Dollar sign (prevent variable expansion)
+                        .replace('`', '\\`')      // Backtick (prevent command substitution)
+                    "export ${varName}=\"${escapedValue}\""
+                }.join('\n')
+
                 def scriptContent = """#!/bin/bash
                     #SBATCH ${exemptionComment} --output=${outputPath}
                     ${taskArgs.collect { "#SBATCH $it" }.join('\n')}
@@ -1092,6 +1122,7 @@ def runLLMTestlistWithSbatch(pipeline, platform, testList, config=VANILLA_CONFIG
                     export coverageConfigFile="$coverageConfigFile"
                     export NVIDIA_IMEX_CHANNELS=\${NVIDIA_IMEX_CHANNELS:-0}
                     export NVIDIA_VISIBLE_DEVICES=\${NVIDIA_VISIBLE_DEVICES:-\$(seq -s, 0 \$((\$(nvidia-smi --query-gpu=count -i 0 --format=noheader)-1)))}
+                    ${envExportStatements}
 
                     echo "Env NVIDIA_IMEX_CHANNELS: \$NVIDIA_IMEX_CHANNELS"
                     echo "Env NVIDIA_VISIBLE_DEVICES: \$NVIDIA_VISIBLE_DEVICES"
@@ -2996,7 +3027,8 @@ def launchTestJobs(pipeline, testFilter)
         // "RTXPro6000-PyTorch-Post-Merge-1": ["rtx-pro-6000", "l0_rtx_pro_6000", 1, 1],
         // "RTXPro6000-4_GPUs-PyTorch-Post-Merge-1": ["rtx-pro-6000-x4", "l0_rtx_pro_6000", 1, 2, 4],
         // "RTXPro6000-4_GPUs-PyTorch-Post-Merge-2": ["rtx-pro-6000-x4", "l0_rtx_pro_6000", 2, 2, 4],
-        "RTXPro6000D-PyTorch-Post-Merge-1": ["rtx-pro-6000d", "l0_rtx_pro_6000", 1, 1],
+        "RTXPro6000D-PyTorch-1": ["rtx-pro-6000d", "l0_rtx_pro_6000", 1, 2],
+        "RTXPro6000D-PyTorch-2": ["rtx-pro-6000d", "l0_rtx_pro_6000", 2, 2],
         "RTXPro6000D-4_GPUs-PyTorch-Post-Merge-1": ["rtx-pro-6000d-x4", "l0_rtx_pro_6000", 1, 2, 4],
         "RTXPro6000D-4_GPUs-PyTorch-Post-Merge-2": ["rtx-pro-6000d-x4", "l0_rtx_pro_6000", 2, 2, 4],
     ]
@@ -3023,6 +3055,7 @@ def launchTestJobs(pipeline, testFilter)
         "DGX_H100-4_GPUs-PyTorch-DeepSeek-1": ["dgx-h100-x4-oci", "l0_dgx_h100", 1, 1, 4],
         "DGX_H100-4_GPUs-PyTorch-GptOss-1": ["dgx-h100-x4-oci", "l0_dgx_h100", 1, 1, 4],
         "DGX_H100-4_GPUs-PyTorch-Others-1": ["dgx-h100-x4-oci", "l0_dgx_h100", 1, 1, 4],
+        "DGX_H100-4_GPUs-PyTorch-Ray-1": ["dgx-h100-x4-oci", "l0_dgx_h100", 1, 1, 4],
         "B300-PyTorch-1": ["b300-single", "l0_b300", 1, 1],
         "DGX_B200-4_GPUs-PyTorch-1": ["b200-x4", "l0_dgx_b200", 1, 1, 4],
         "DGX_B200-4_GPUs-PyTorch-Ray-1": ["b200-x4-lbd", "l0_dgx_b200", 1, 1, 4, 1, true],
