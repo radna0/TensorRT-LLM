@@ -27,6 +27,7 @@ from tensorrt_llm.layers.lora import LoraParams
 
 from .._common import default_net, default_trtnet
 from .._utils import QuantModeWrapper, get_sm_version, int32_array
+from ..math_utils import pad_up
 from ..functional import (AllReduceParams, SideStreamIDType, Tensor,
                           _add_plugin_info, _create_tensor, abs, allreduce,
                           cast, concat, constant, cuda_stream_sync, div, expand,
@@ -41,7 +42,8 @@ from ..module import Module, ModuleList
 from ..parameter import Parameter
 from ..plugin import TRT_LLM_PLUGIN_NAMESPACE
 from ..quantization import GroupwiseQuantAlgo, QuantMode
-from ..quantization.functional import (get_weight_scale_interleave_factor,
+from ..quantization.functional import (dynamic_quantize,
+                                       get_weight_scale_interleave_factor,
                                        postprocess_weight_only,
                                        preprocess_weights_for_mixed_gemm,
                                        quantize)
@@ -146,11 +148,15 @@ def _moe_plugin(moe_config,
                 hidden_states,
                 hidden_states_raw,
                 token_selected_experts,
+                input_sf,
                 token_final_scales,
                 expert_weights_1,
                 expert_weights_2,
                 expert_bias_1,
                 expert_bias_2,
+                swiglu_alpha,
+                swiglu_beta,
+                swiglu_limit,
                 expert_scale_1,
                 expert_scale_2,
                 expert_scale_3,
@@ -190,6 +196,10 @@ def _moe_plugin(moe_config,
     expert_weights_2 = from_parameter(expert_weights_2)
     expert_bias_1 = from_parameter(expert_bias_1)
     expert_bias_2 = from_parameter(expert_bias_2)
+    input_sf = from_parameter(input_sf)
+    swiglu_alpha = from_parameter(swiglu_alpha)
+    swiglu_beta = from_parameter(swiglu_beta)
+    swiglu_limit = from_parameter(swiglu_limit)
     expert_scale_1 = from_parameter(expert_scale_1)
     expert_scale_2 = from_parameter(expert_scale_2)
     expert_scale_3 = from_parameter(expert_scale_3)
@@ -298,13 +308,18 @@ def _moe_plugin(moe_config,
 
     # Create the plugin with our constant inputs to the constructor
     plugin_creator = trt.get_plugin_registry().get_plugin_creator(
-        'MixtureOfExperts', '1', TRT_LLM_PLUGIN_NAMESPACE)
+        'MixtureOfExperts', '2', TRT_LLM_PLUGIN_NAMESPACE)
     assert plugin_creator is not None
     moe_plugin = plugin_creator.create_plugin("mixture_of_experts", pfc)
 
     # Instantiate the plugin with our specific inputs
     plugin_inputs = [hidden_states, expert_weights_1, expert_weights_2]
     plugin_inputs += [token_selected_experts]
+    if quant_mode.has_w4a8_mxfp4_mxfp8():
+        if input_sf is None:
+            raise ValueError(
+                "input_sf is required for W4A8_MXFP4_MXFP8 quantization")
+        plugin_inputs += [input_sf]
 
     # Add conditional inputs
 
@@ -316,6 +331,13 @@ def _moe_plugin(moe_config,
     if expert_bias_1:
         assert expert_bias_2
         plugin_inputs += [expert_bias_1, expert_bias_2]
+
+    if act_fn == "swiglu_bias":
+        if swiglu_alpha is None or swiglu_beta is None or swiglu_limit is None:
+            raise ValueError(
+                "swiglu_bias activation requires swiglu_alpha/beta/limit tensors"
+            )
+        plugin_inputs += [swiglu_alpha, swiglu_beta, swiglu_limit]
 
     # Add conditional inputs
     if (quant_mode.is_weight_only() and not quant_mode.has_per_group_scaling()):
@@ -343,7 +365,7 @@ def _moe_plugin(moe_config,
         if use_lora:
             assert expert_scale_5
             plugin_inputs += [expert_scale_5]
-    elif quant_mode.has_nvfp4():
+    elif quant_mode.has_nvfp4() or quant_mode.has_mxfp4():
         assert expert_scale_1
         assert expert_scale_2
         assert expert_scale_3
@@ -456,7 +478,7 @@ class MOEWeightWrapper(Module):
         else:
             self.register_parameter('per_channel_scale', None)
 
-        if quant_mode.has_nvfp4():
+        if quant_mode.has_nvfp4() or quant_mode.has_mxfp4():
             self.expert_shape = (experts_per_node, out_features, in_features)
             weight_dtype = trt.fp4
 
@@ -471,16 +493,17 @@ class MOEWeightWrapper(Module):
         else:
             self.register_parameter('bias', None)
 
-        self.scaling_vector_size = 16
+        self.scaling_vector_size = 32 if quant_mode.has_mxfp4() else 16
         if quant_mode.has_fp8_qdq():
             self.activation_scaling_factor = Parameter(shape=(1, ),
                                                        dtype=trt.float32)
             self.weights_scaling_factor = Parameter(shape=(experts_per_node, 1),
                                                     dtype=trt.float32)
-        elif quant_mode.has_nvfp4():
+        elif quant_mode.has_nvfp4() or quant_mode.has_mxfp4():
+            scale_rows = pad_up(out_features, 128)
+            scale_cols = pad_up(in_features // self.scaling_vector_size, 4)
             self.weights_block_scaling_factor_interleaved = Parameter(
-                shape=(experts_per_node, out_features,
-                       in_features // self.scaling_vector_size),
+                shape=(experts_per_node, scale_rows, scale_cols),
                 dtype=trt.fp8)
             self.weights_block_scaling_factor = Parameter(
                 shape=(experts_per_node, out_features,
@@ -703,10 +726,18 @@ class MOEWeightWrapper(Module):
             weights = stack_weights(tllm_key, weights)
         if tllm_key.endswith("weights_block_scaling_factor_interleaved"):
             weights = stack_weights(tllm_key, weights)
+            rows = weights.shape[-2]
+            cols = weights.shape[-1]
+            rows_padded = pad_up(rows, 128)
+            cols_padded = pad_up(cols, 4)
+            if weights.dim() == 3:
+                out_shape = (weights.shape[0], rows_padded, cols_padded)
+            else:
+                out_shape = (rows_padded, cols_padded)
             weights = torch.ops.trtllm.block_scale_interleave(
                 weights.to(torch.float8_e4m3fn).view(
-                    torch.uint8).cpu().contiguous()).reshape(
-                        weights.shape).view(torch.float8_e4m3fn)
+                    torch.uint8).cpu().contiguous()).view(
+                        torch.float8_e4m3fn).reshape(out_shape)
         if tllm_key.endswith("activation_global_scaling_factor"):
             # Use max input range.
             weights = max(weights).float().reshape((1, ))
@@ -744,6 +775,7 @@ class MixtureOfExperts(Module):
                  hidden_act: str,
                  mapping: Mapping = Mapping(),
                  bias: bool = True,
+                 router_bias: bool = False,
                  dtype=None,
                  tp_group: List[int] = None,
                  tp_size: int = 1,
@@ -772,6 +804,7 @@ class MixtureOfExperts(Module):
         self.mapping = mapping
         self.quant_mode = quant_mode
         self.bias = bias
+        self.router_bias = router_bias
         self.use_all_reduce = use_all_reduce
         self.zero = zero
         self.pre_quant_scale = pre_quant_scale
@@ -812,6 +845,8 @@ class MixtureOfExperts(Module):
             self.weight_dtype = trt.int8
         elif quant_mode.has_fp8_qdq():
             self.weight_dtype = trt.fp8
+        elif quant_mode.has_nvfp4() or quant_mode.has_mxfp4():
+            self.weight_dtype = trt.fp4
 
         rank_experts = self.mapping.ep_experts(self.num_experts)
         self.wrapper_tllm_to_externel_key_dict = {
@@ -833,7 +868,7 @@ class MixtureOfExperts(Module):
                 "input_scale"
             })
 
-        if quant_mode.has_nvfp4():
+        if quant_mode.has_nvfp4() or quant_mode.has_mxfp4():
             self.wrapper_tllm_to_externel_key_dict.update({
                 "weights_block_scaling_factor_interleaved":
                 "weight_scale",
@@ -853,7 +888,7 @@ class MixtureOfExperts(Module):
             self.router = RowLinear(
                 hidden_size,
                 self.num_experts,
-                bias=False,
+                bias=self.router_bias,
                 dtype=
                 "float32",  # Routing is sensitive since it conditions what experts are used
                 tp_group=None,
@@ -865,6 +900,17 @@ class MixtureOfExperts(Module):
             }
 
         self.init_experts()
+
+        self.swiglu_alpha = None
+        self.swiglu_beta = None
+        self.swiglu_limit = None
+        if self.hidden_act == "swiglu_bias":
+            self.swiglu_alpha = Parameter(shape=(self.experts_per_node, ),
+                                          dtype=trt.float32)
+            self.swiglu_beta = Parameter(shape=(self.experts_per_node, ),
+                                         dtype=trt.float32)
+            self.swiglu_limit = Parameter(shape=(self.experts_per_node, ),
+                                          dtype=trt.float32)
 
         self.max_low_rank = None
 
@@ -1039,6 +1085,8 @@ class MixtureOfExperts(Module):
                         token_final_scales, lora_layer_params, side_stream_id):
 
         groupwise_quant_params = MoeGroupwiseQuantParams()
+        input_sf = None
+        hidden_states_raw = hidden_states
         if self.quant_mode.has_fp8_qdq():
             assert self.fc.weight.value.dtype == trt.fp8, (
                 "mlp fc weight dtype should be fp8 in the fp8 quantization mode."
@@ -1077,6 +1125,44 @@ class MixtureOfExperts(Module):
             # We pass through the weights unchanged, the quantization is done in the plugin
             hidden_states_quant = hidden_states
             dtype_quant = trt.fp4
+            weight_dtype_quant = trt.fp4
+            output_dtype_quant = self.dtype
+
+            scale_1 = div(1.0, self.fc.activation_global_scaling_factor.value)
+            scale_2 = self.fc.weights_block_scaling_factor_interleaved
+            scale_3 = self.fc.alpha
+            scale_4 = div(1.0, self.proj.activation_global_scaling_factor.value)
+            scale_5 = self.proj.weights_block_scaling_factor_interleaved
+            scale_6 = self.proj.alpha
+        elif self.quant_mode.has_mxfp4():
+            hidden_states_quant = hidden_states
+            if self.quant_mode.has_w4a8_mxfp4_mxfp8():
+                dtype_quant = trt.fp8
+                if isinstance(hidden_states_quant, (tuple, list)):
+                    hidden_states_quant, input_sf = hidden_states_quant
+                    hidden_states_raw = hidden_states_quant
+                elif hidden_states_quant.dtype != trt.fp8:
+                    # MXFP8 block scaling uses per-block scales without a global factor.
+                    mxfp8_scale = constant(
+                        np.array([1.0], dtype=np.float32))
+                    hidden_states_quant, input_sf = dynamic_quantize(
+                        hidden_states,
+                        mxfp8_scale,
+                        axis=-1,
+                        block_size=32,
+                        data_qtype=trt.fp8,
+                        scale_qtype=trt.fp8)
+                else:
+                    raise RuntimeError(
+                        "W4A8_MXFP4_MXFP8 requires input_sf for FP8 inputs")
+            elif self.quant_mode.has_w4a8_mxfp4_fp8():
+                dtype_quant = trt.fp8
+                if hidden_states_quant.dtype != trt.fp8:
+                    hidden_states_quant = quantize(
+                        hidden_states,
+                        self.fc.activation_global_scaling_factor.value, 'fp8')
+            else:
+                dtype_quant = self.dtype
             weight_dtype_quant = trt.fp4
             output_dtype_quant = self.dtype
 
@@ -1132,13 +1218,17 @@ class MixtureOfExperts(Module):
             scale_6 = None
         output = _moe_plugin(self.moe_config,
                              hidden_states_quant,
-                             hidden_states,
+                             hidden_states_raw,
                              token_selected_experts,
+                             input_sf,
                              token_final_scales,
                              expert_weights_1=self.fc.weight.value,
                              expert_weights_2=self.proj.weight.value,
                              expert_bias_1=self.fc.bias,
                              expert_bias_2=self.proj.bias,
+                             swiglu_alpha=self.swiglu_alpha,
+                             swiglu_beta=self.swiglu_beta,
+                             swiglu_limit=self.swiglu_limit,
                              expert_scale_1=scale_1,
                              expert_scale_2=scale_2,
                              expert_scale_3=scale_3,

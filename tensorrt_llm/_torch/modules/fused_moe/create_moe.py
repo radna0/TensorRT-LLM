@@ -3,6 +3,7 @@ from typing import Dict, Optional, Type
 
 import torch
 
+from tensorrt_llm._utils import get_sm_version
 from tensorrt_llm.logger import logger
 from tensorrt_llm.models.modeling_utils import QuantConfig
 
@@ -46,6 +47,15 @@ def get_moe_cls(
     elif moe_backend.upper() == "DEEPGEMM":
         return DeepGemmFusedMoE
     elif moe_backend.upper() == "TRTLLM":
+        allow_unsupported = os.environ.get(
+            "TRTLLM_GEN_ALLOW_UNSUPPORTED_SM", "0") not in ("", "0")
+        if get_sm_version() >= 120 and not allow_unsupported:
+            logger.warning(
+                "TRTLLMGenFusedMoE is not supported on SM120+. "
+                "Set TRTLLM_GEN_ALLOW_UNSUPPORTED_SM=1 to force it, "
+                "or use CutlassFusedMoE."
+            )
+            return CutlassFusedMoE
         if quant_config is not None and (
                 quant_config.quant_mode.has_fp8_block_scales()
                 or quant_config.quant_mode.has_nvfp4()

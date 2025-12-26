@@ -48,48 +48,49 @@ namespace tensorrt_llm::plugins
 //     2.  host_past_key_value_lengths [batch_size] (int32) (optional)
 //     3.  host_max_attention_window_sizes [num_layers] (int32)
 //     4.  host_sink_token_length [1] (int32)
-//     5.  context_lengths [batch_size]
-//     6.  cache_indir [num_gen_requests, beam_width, memory_max_len] (required in beamsearch) (optional)
-//     7.  host_request_types [batch_size] int32. 0: context; 1: generation: 2: none. When not in inflight-batching
+//     5.  attention_sinks [num_heads] (float, optional)
+//     6.  context_lengths [batch_size]
+//     7.  cache_indir [num_gen_requests, beam_width, memory_max_len] (required in beamsearch) (optional)
+//     8.  host_request_types [batch_size] int32. 0: context; 1: generation: 2: none. When not in inflight-batching
 //     mode,
 //                      all elements must be identical.
-//     8.  past_key_value_pool [batch_size, 2, local_num_kv_heads, max_seq_len, head_size] or
+//     9.  past_key_value_pool [batch_size, 2, local_num_kv_heads, max_seq_len, head_size] or
 //         block_offsets [batch_size, 2, max_blocks_per_seq] if paged kv cache (optional)
-//     8.1 host_block_offsets [batch_size, 2, max_blocks_per_seq] if paged kv cache (optional)
-//     8.2 host_pool_pointers [2] if paged kv cache (optional)
-//     9.  kv_cache_quantization_scale [1] (optional)
-//     10. kv_cache_dequantization_scale [1] (optional)
-//     11. attention_output_quantization_scale [1] (on device, optional)
-//     12. attention_mask [num_tokens, kv_seqlen] (on device, bool, optional)
-//     13. attention_packed_mask [num_tokens, kv_seqlen / 32] (on device, uint32_t, optional)
+//     9.1 host_block_offsets [batch_size, 2, max_blocks_per_seq] if paged kv cache (optional)
+//     9.2 host_pool_pointers [2] if paged kv cache (optional)
+//     10. kv_cache_quantization_scale [1] (optional)
+//     11. kv_cache_dequantization_scale [1] (optional)
+//     12. attention_output_quantization_scale [1] (on device, optional)
+//     13. attention_mask [num_tokens, kv_seqlen] (on device, bool, optional)
+//     14. attention_packed_mask [num_tokens, kv_seqlen / 32] (on device, uint32_t, optional)
 //          - pack masks by encoding multiple mask positions into a single 32-bit unsigned integer.
 //          - see kernels/contextMultiHeadAttention/fmhaPackedMask.cpp for more details.
-//     14. rotary_inv_freq [head_size / 2] or [head_size] (longrope type) (float) (on device, optional)
-//     15. rotary_cos_sin [max_num_embedding_positions, 2] (float) (on device, optional)
-//     16. alibi_slopes [num_heads] (optional for ALiBi position embedding)
-//     17. relative_attention_bias [num_heads] (optional for ALiBi position embedding)
-//     18. host_context_lengths [batch_size] int32. (optional, required when remove_input_padding is true)
-//     19. qkv_bias (optional) [local_hidden_size * 3]
-//     20. spec_decoding_generation_lengths (optional, required when medusa is enabled) (int32_t) [batch_size]
-//     21. spec_decoding_packed_mask (optional, required when medusa is enabled) (int32_t) [num_tokens, packed_mask_dim]
+//     15. rotary_inv_freq [head_size / 2] or [head_size] (longrope type) (float) (on device, optional)
+//     16. rotary_cos_sin [max_num_embedding_positions, 2] (float) (on device, optional)
+//     17. alibi_slopes [num_heads] (optional for ALiBi position embedding)
+//     18. relative_attention_bias [num_heads] (optional for ALiBi position embedding)
+//     19. host_context_lengths [batch_size] int32. (optional, required when remove_input_padding is true)
+//     20. qkv_bias (optional) [local_hidden_size * 3]
+//     21. spec_decoding_generation_lengths (optional, required when medusa is enabled) (int32_t) [batch_size]
+//     22. spec_decoding_packed_mask (optional, required when medusa is enabled) (int32_t) [num_tokens, packed_mask_dim]
 //                                    packed_mask_dim = divUp(max_num_spec_decoding_tokens + 1, 32)
-//     22. spec_decoding_position_offsets (optional, required when medusa is enabled) (int32_t) [batch_size,
+//     23. spec_decoding_position_offsets (optional, required when medusa is enabled) (int32_t) [batch_size,
 //     max_num_spec_decoding_tokens + 1]
-//     23. spec_decoding_use (optional, bool) [1]: If it is set as true, enable speculative decoding
-//     24. long_rope_rotary_inv_freq [head / 2] (float) (on device, optional)
-//     25. long_rope_rotary_cos_sin [max_num_embedding_positions, 2] (float) (on device, optional)
-//     26. host_runtime_perf_knobs (int64)
-//     27. host_context_progress (void*)
-//     28. position_id_tensor(MLA) [total_tokens], used for rope embedding in MLA
-//     29. q_a_proj_tensor(MLA) [hidden_dim, c_q_dim + c_k_dim + ropd_dim], used to proj compacted QKV
-//     30. q_a_layernorm_tensor(MLA) [c_q_dim], rmsnorm weight for compacted q
-//     31. q_b_proj_tensor(MLA) [c_q_dim, head_num * head_size], weight for companted q to q in context
-//     32. kv_a_proj_with_mqa_tensor(MLA) [c_q_dim, head_num * (c_k_dim + rope_dim)], weight for companted q to kdim in
+//     24. spec_decoding_use (optional, bool) [1]: If it is set as true, enable speculative decoding
+//     25. long_rope_rotary_inv_freq [head / 2] (float) (on device, optional)
+//     26. long_rope_rotary_cos_sin [max_num_embedding_positions, 2] (float) (on device, optional)
+//     27. host_runtime_perf_knobs (int64)
+//     28. host_context_progress (void*)
+//     29. position_id_tensor(MLA) [total_tokens], used for rope embedding in MLA
+//     30. q_a_proj_tensor(MLA) [hidden_dim, c_q_dim + c_k_dim + ropd_dim], used to proj compacted QKV
+//     31. q_a_layernorm_tensor(MLA) [c_q_dim], rmsnorm weight for compacted q
+//     32. q_b_proj_tensor(MLA) [c_q_dim, head_num * head_size], weight for companted q to q in context
+//     33. kv_a_proj_with_mqa_tensor(MLA) [c_q_dim, head_num * (c_k_dim + rope_dim)], weight for companted q to kdim in
 //     generation
-//     33. kv_a_layernorm_tensor(MLA) [c_k_dim], rmsnorm weight for compacted kv
-//     34. kv_b_proj_tensor(MLA) [c_k_dim, head_num * 2 * (head_size - rope_dim)], weight for compacted kv to kv in
+//     34. kv_a_layernorm_tensor(MLA) [c_k_dim], rmsnorm weight for compacted kv
+//     35. kv_b_proj_tensor(MLA) [c_k_dim, head_num * 2 * (head_size - rope_dim)], weight for compacted kv to kv in
 //     context
-//     35. skip_attn (optional, bool) [1]: If it is set as true, skip the atteniton plugin and return
+//     36. skip_attn (optional, bool) [1]: If it is set as true, skip the atteniton plugin and return
 //     directly.
 //
 // outputs
@@ -110,6 +111,7 @@ public:
         int tp_rank,           // for ALiBi
         bool unfuse_qkv_gemm,  // for AutoPP
         bool use_logn_scaling, // for LognScaling
+        bool use_attention_sinks,
         tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
         tensorrt_llm::kernels::AttentionMaskType mask_type,
         tensorrt_llm::kernels::BlockSparseParams block_sparse_params, bool paged_kv_cache, int tokens_per_block,
@@ -191,6 +193,7 @@ private:
         HOST_PAST_KEY_VALUE_LENGTHS,
         HOST_MAX_ATTENTION_WINDOW,
         HOST_SINK_TOKEN_LENGTH,
+        ATTENTION_SINKS,
         CONTEXT_LENGTHS,
         CACHE_INDIR,
         REQUEST_TYPES,

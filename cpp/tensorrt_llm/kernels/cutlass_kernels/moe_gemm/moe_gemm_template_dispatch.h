@@ -71,6 +71,7 @@
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <math.h>
+#include <algorithm>
 #include <sstream>
 #include <type_traits>
 
@@ -578,6 +579,27 @@ MoeGemmRunner<T, WeightType, OutputType, ScaleBiasType>::getTmaWarpSpecializedCo
         auto sm100_configs
             = tensorrt_llm::kernels::cutlass_kernels::get_candidate_configs(100, max_split_k, config_type_param);
         std::copy(sm100_configs.begin(), sm100_configs.end(), std::back_inserter(tma_ws_configs));
+    }
+
+    if (sm == 120 || sm == 121)
+    {
+        tma_ws_configs.erase(std::remove_if(tma_ws_configs.begin(), tma_ws_configs.end(),
+                                 [](cutlass_extensions::CutlassGemmConfig const& config)
+                                 {
+                                     if (config.cluster_shape
+                                         != cutlass_extensions::ClusterShape::ClusterShape_1x1x1)
+                                     {
+                                         return true;
+                                     }
+                                     auto shape = cutlass_extensions::enum_to_shape_tuple(config.tile_config_sm120);
+                                     int m = std::get<0>(shape);
+                                     int n = std::get<1>(shape);
+                                     int k = std::get<2>(shape);
+                                     return !((m == 128 && n == 128 && (k == 128 || k == 256))
+                                         || (m == 128 && n == 256 && k == 128)
+                                         || (m == 256 && n == 128 && k == 128));
+                                 }),
+            tma_ws_configs.end());
     }
 
     if (supports_finalize_fusion)

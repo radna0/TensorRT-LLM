@@ -18,9 +18,68 @@
 # TensorRT install path in docker image
 set(TensorRT_WELL_KNOWN_ROOT /usr/local/tensorrt)
 
+function(_tensorrt_set_cache out_var value)
+  if(value)
+    set(${out_var} "${value}" PARENT_SCOPE)
+    set(${out_var} "${value}" CACHE FILEPATH "TensorRT library" FORCE)
+  endif()
+endfunction()
+
+function(_tensorrt_find_real_lib out_var base_name)
+  if(WIN32)
+    return()
+  endif()
+
+  set(_roots)
+  if(TensorRT_ROOT)
+    list(APPEND _roots "${TensorRT_ROOT}")
+  endif()
+  list(APPEND _roots "${TensorRT_WELL_KNOWN_ROOT}")
+
+  set(_candidates)
+  foreach(_root IN LISTS _roots)
+    foreach(_suffix lib lib64)
+      file(GLOB _glob "${_root}/${_suffix}/lib${base_name}.so.*")
+      list(APPEND _candidates ${_glob})
+    endforeach()
+  endforeach()
+
+  list(SORT _candidates)
+  list(REVERSE _candidates)
+  foreach(_candidate IN LISTS _candidates)
+    if(EXISTS "${_candidate}")
+      file(SIZE "${_candidate}" _size)
+      if(_size GREATER 0)
+        _tensorrt_set_cache(${out_var} "${_candidate}")
+        return()
+      endif()
+    endif()
+  endforeach()
+endfunction()
+
+function(_tensorrt_fix_stub_lib out_var base_name)
+  if(WIN32)
+    return()
+  endif()
+
+  if(NOT ${out_var})
+    _tensorrt_find_real_lib(${out_var} ${base_name})
+    return()
+  endif()
+
+  file(SIZE "${${out_var}}" _size)
+  if(_size GREATER 0)
+    return()
+  endif()
+
+  _tensorrt_find_real_lib(${out_var} ${base_name})
+endfunction()
+
 find_path(
   TensorRT_INCLUDE_DIR
   NAMES NvInfer.h
+  HINTS ${TensorRT_ROOT}
+  PATH_SUFFIXES include
   PATHS ${TensorRT_WELL_KNOWN_ROOT}/include)
 
 function(_tensorrt_get_version)
@@ -70,12 +129,16 @@ endmacro(_tensorrt_find_dll)
 find_library(
   TensorRT_LIBRARY
   NAMES "nvinfer_${TensorRT_VERSION_MAJOR}" nvinfer
+  HINTS ${TensorRT_ROOT}
+  PATH_SUFFIXES lib lib64
   PATHS ${TensorRT_WELL_KNOWN_ROOT}/lib)
 
 if(WIN32)
   _tensorrt_find_dll(TensorRT_DLL "nvinfer_${TensorRT_VERSION_MAJOR}.dll"
                      nvinfer.dll)
 endif()
+
+_tensorrt_fix_stub_lib(TensorRT_LIBRARY nvinfer)
 
 if(TensorRT_LIBRARY)
   set(TensorRT_LIBRARIES ${TensorRT_LIBRARIES} ${TensorRT_LIBRARY})
@@ -88,12 +151,17 @@ if(TensorRT_FIND_COMPONENTS)
     find_path(
       TensorRT_OnnxParser_INCLUDE_DIR
       NAMES NvOnnxParser.h
+      HINTS ${TensorRT_ROOT}
+      PATH_SUFFIXES include
       PATHS ${TensorRT_WELL_KNOWN_ROOT}/include)
 
     find_library(
       TensorRT_OnnxParser_LIBRARY
       NAMES "nvonnxparser_${TensorRT_VERSION_MAJOR}" nvonnxparser
+      HINTS ${TensorRT_ROOT}
+      PATH_SUFFIXES lib lib64
       PATHS ${TensorRT_WELL_KNOWN_ROOT}/lib)
+    _tensorrt_fix_stub_lib(TensorRT_OnnxParser_LIBRARY nvonnxparser)
     if(TensorRT_OnnxParser_LIBRARY AND TensorRT_LIBRARIES)
       set(TensorRT_LIBRARIES ${TensorRT_LIBRARIES}
                              ${TensorRT_OnnxParser_LIBRARY})
@@ -111,12 +179,17 @@ if(TensorRT_FIND_COMPONENTS)
     find_path(
       TensorRT_Plugin_INCLUDE_DIR
       NAMES NvInferPlugin.h
+      HINTS ${TensorRT_ROOT}
+      PATH_SUFFIXES include
       PATHS ${TensorRT_WELL_KNOWN_ROOT}/include)
 
     find_library(
       TensorRT_Plugin_LIBRARY
       NAMES "nvinfer_plugin_${TensorRT_VERSION_MAJOR}" nvinfer_plugin
+      HINTS ${TensorRT_ROOT}
+      PATH_SUFFIXES lib lib64
       PATHS ${TensorRT_WELL_KNOWN_ROOT}/lib)
+    _tensorrt_fix_stub_lib(TensorRT_Plugin_LIBRARY nvinfer_plugin)
 
     if(TensorRT_Plugin_LIBRARY AND TensorRT_LIBRARIES)
       set(TensorRT_LIBRARIES ${TensorRT_LIBRARIES} ${TensorRT_Plugin_LIBRARY})

@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include <cfloat>
 #include "moeTopKFuncs.cuh"
 #include "tensorrt_llm/common/config.h"
 #include "tensorrt_llm/common/cudaTypeUtils.cuh"
@@ -22,6 +22,10 @@
 #include "tensorrt_llm/kernels/noAuxTcKernels.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+
+#ifndef FLT_MAX
+#define FLT_MAX 3.402823466e+38F
+#endif
 
 namespace cg = cooperative_groups;
 using namespace tensorrt_llm::common;

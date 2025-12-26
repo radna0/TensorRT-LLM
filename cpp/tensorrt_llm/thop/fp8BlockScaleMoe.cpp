@@ -22,6 +22,7 @@
 #include <ATen/cuda/EmptyTensor.h>
 #include <torch/library.h>
 
+#include <cstdlib>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -36,6 +37,15 @@ using tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::RoutingMethodTy
 using MoeRunnerType = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::MoE::Runner;
 using tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::computeSelectedTileN;
 
+namespace
+{
+bool allowTrtllmGenUnsupportedSm()
+{
+    char const* env = std::getenv("TRTLLM_GEN_ALLOW_UNSUPPORTED_SM");
+    return env && env[0] != '\0' && env[0] != '0';
+}
+} // namespace
+
 at::Tensor run_fp8_block_scale_moe(at::optional<at::Tensor> const& routing_logits,
     std::optional<at::Tensor> const& routing_bias, at::Tensor const& hidden_states,
     at::Tensor const& hidden_states_scale, at::Tensor const& gemm1_weights, at::Tensor const& gemm1_weights_scale,
@@ -46,7 +56,9 @@ at::Tensor run_fp8_block_scale_moe(at::optional<at::Tensor> const& routing_logit
     MoeRunnerType& moe_runner, int64_t moeConfigIndex, std::optional<at::Tensor> const& topk_weights,
     std::optional<at::Tensor> const& topk_ids)
 {
-    TORCH_CHECK(tensorrt_llm::common::isSM100Family(), "Only SM100f is supported by FP8 block scale MOE");
+    TORCH_CHECK(tensorrt_llm::common::isSM100Family() || allowTrtllmGenUnsupportedSm(),
+        "Only SM100f is supported by FP8 block scale MOE "
+        "(set TRTLLM_GEN_ALLOW_UNSUPPORTED_SM=1 to override).");
 
     if (topk_ids.has_value() && topk_weights.has_value())
     {

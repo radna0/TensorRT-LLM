@@ -175,7 +175,6 @@ set(TRTLLM_LINK_LIBS
     ${CUBLASLT_LIB}
     ${CURAND_LIB}
     ${CMAKE_DL_LIBS}
-    ${TRT_LIB}
     common_src
     kernels_src
     flash_mla_src
@@ -199,7 +198,8 @@ set(TRTLLM_LINK_LIBS
     testing_src
     userbuffers_src
     ${DECODER_SHARED_TARGET_0}
-    ${DECODER_SHARED_TARGET_1})
+    ${DECODER_SHARED_TARGET_1}
+    ${TRT_LIB})
 if(USING_OSS_CUTLASS_LOW_LATENCY_GEMM)
   set(TRTLLM_LINK_LIBS ${TRTLLM_LINK_LIBS} low_latency_gemm_src)
   message(STATUS "USING_OSS_CUTLASS_LOW_LATENCY_GEMM")

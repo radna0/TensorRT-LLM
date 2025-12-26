@@ -15,19 +15,31 @@
 # the License.
 #
 
-find_library(NCCL_LIBRARY NAMES nccl)
+find_library(
+  NCCL_LIBRARY
+  NAMES nccl
+  HINTS ${NCCL_ROOT}
+  PATH_SUFFIXES lib lib64)
 
 if(NCCL_LIBRARY)
   set(NCCL_LIBRARIES ${NCCL_LIBRARIES} ${NCCL_LIBRARY})
 endif()
 
-find_library(NCCL_STATIC_LIBRARY NAMES nccl_static)
+find_library(
+  NCCL_STATIC_LIBRARY
+  NAMES nccl_static
+  HINTS ${NCCL_ROOT}
+  PATH_SUFFIXES lib lib64)
 
 if(NCCL_STATIC_LIBRARY)
   set(NCCL_LIBRARIES ${NCCL_LIBRARIES} ${NCCL_STATIC_LIBRARY})
 endif()
 
-find_path(NCCL_INCLUDE_DIR NAMES nccl.h)
+find_path(
+  NCCL_INCLUDE_DIR
+  NAMES nccl.h
+  HINTS ${NCCL_ROOT}
+  PATH_SUFFIXES include)
 
 function(_nccl_get_version)
   unset(NCCL_VERSION_STRING PARENT_SCOPE)

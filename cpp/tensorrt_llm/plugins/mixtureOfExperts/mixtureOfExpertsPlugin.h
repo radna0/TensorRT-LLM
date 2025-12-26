@@ -285,6 +285,16 @@ private:
         return mUseFinalScales;
     }
 
+    bool hasInputSf() const
+    {
+        return mQuantMode.hasW4a8Mxfp4Mxfp8();
+    }
+
+    bool hasSwigluParams() const
+    {
+        return mActivationType == ActivationType::SwigluBias;
+    }
+
     bool hasExpertIntQuantScales() const
     {
         return mQuantMode.hasInt4Weights() || mQuantMode.hasInt8Weights();
@@ -302,7 +312,17 @@ private:
 
     bool hasFP4QuantScales() const
     {
+        return hasNvFp4QuantScales() || hasMxfp4QuantScales();
+    }
+
+    bool hasNvFp4QuantScales() const
+    {
         return mQuantMode.hasNvfp4();
+    }
+
+    bool hasMxfp4QuantScales() const
+    {
+        return mQuantMode.hasW4a8Mxfp4Fp8() || mQuantMode.hasW4a8Mxfp4Mxfp8() || mQuantMode.hasW4a16Mxfp4();
     }
 
     bool hasGroupwiseIntQuantScales() const
@@ -340,9 +360,14 @@ private:
         return mUseLora && isGatedActivation(mActivationType);
     }
 
+    IndexType getInputSfIndex() const
+    {
+        return getTokenSelectedExpertsIndex() + hasInputSf();
+    }
+
     IndexType getTokenFinalScalesIndex() const
     {
-        return getTokenSelectedExpertsIndex() + hasFinalScales();
+        return getInputSfIndex() + hasFinalScales();
     }
 
     IndexType getExpertBias1Index() const
@@ -355,12 +380,27 @@ private:
         return getExpertBias1Index() + hasBias();
     }
 
+    IndexType getSwigluAlphaIndex() const
+    {
+        return getExpertBias2Index() + hasSwigluParams();
+    }
+
+    IndexType getSwigluBetaIndex() const
+    {
+        return getSwigluAlphaIndex() + hasSwigluParams();
+    }
+
+    IndexType getSwigluLimitIndex() const
+    {
+        return getSwigluBetaIndex() + hasSwigluParams();
+    }
+
     /*
      * Weight-Only int quant scales
      */
     IndexType getExpertIntQuantScale1Index() const
     {
-        return getExpertBias2Index() + hasExpertIntQuantScales();
+        return getSwigluLimitIndex() + hasExpertIntQuantScales();
     }
 
     IndexType getExpertIntQuantScale2Index() const

@@ -23,6 +23,17 @@
 #if ENABLE_MULTI_DEVICE
 #include <nccl.h>
 #include <torch/extension.h>
+#ifdef NCCL_WIN_COLL_SYMMETRIC
+#ifndef TLLM_NCCL_HAS_COMM_WINDOW
+#define TLLM_NCCL_HAS_COMM_WINDOW 1
+#endif
+#else
+#ifndef TLLM_NCCL_HAS_COMM_WINDOW
+#define TLLM_NCCL_HAS_COMM_WINDOW 0
+#endif
+using ncclWindow_t = void*;
+#define NCCL_WIN_COLL_SYMMETRIC 0
+#endif
 #endif
 
 #include <algorithm>
@@ -65,10 +76,14 @@ public:
 
     // Dynamic loading function type definition
     using ncclCommWindowRegisterFunc = ncclResult_t (*)(ncclComm_t, void*, size_t, ncclWindow_t*, int);
+    using ncclCommWindowDeregisterFunc = ncclResult_t (*)(ncclComm_t, ncclWindow_t);
     using ncclMemAllocFunc = ncclResult_t (*)(void**, size_t);
 
     // Get function pointer for ncclCommWindowRegister
     ncclCommWindowRegisterFunc getNCCLCommWindowRegister();
+
+    // Get function pointer for ncclCommWindowDeregister
+    ncclCommWindowDeregisterFunc getNCCLCommWindowDeregister();
 
     // Get function pointer for ncclMemAlloc
     ncclMemAllocFunc getNCCLMemAlloc();
@@ -96,6 +111,7 @@ private:
 #endif
 
     ncclCommWindowRegisterFunc mNCCLCommWindowRegister;
+    ncclCommWindowDeregisterFunc mNCCLCommWindowDeregister;
     ncclMemAllocFunc mNCCLMemAlloc;
     bool mIsLoaded;
 };

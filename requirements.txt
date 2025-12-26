@@ -1,9 +1,9 @@
---extra-index-url https://download.pytorch.org/whl/cu130
+--extra-index-url https://download.pytorch.org/whl/cu128
 -c constraints.txt
 accelerate>=1.7.0
 build
 colored
-cuda-python>=13
+cuda-python>=12
 diffusers>=0.27.0
 lark
 mpi4py
@@ -13,19 +13,19 @@ onnx_graphsurgeon>=0.5.2
 openai
 polygraphy
 psutil
-nvidia-ml-py>=13
+nvidia-ml-py>=12
 pulp
 pandas
 h5py==3.12.1
 StrEnum
 sentencepiece>=0.1.99
-tensorrt~=10.13.3
+tensorrt~=10.14.1.48
 # https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-10.html#rel-25-10 uses 2.9.0a0.
 torch>=2.9.0a0,<=2.9.0
 torchvision
 nvidia-modelopt[torch]~=0.37.0
 # https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-10.html#rel-25-10 uses 2.27.7
-nvidia-nccl-cu13==2.27.7
+nvidia-nccl-cu12==2.27.5
 nvidia-cuda-nvrtc
 transformers==4.57.1
 prometheus_client

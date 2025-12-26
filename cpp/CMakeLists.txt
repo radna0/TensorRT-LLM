@@ -240,6 +240,15 @@ endif()
 # TRT dependencies
 find_package(TensorRT 10 REQUIRED COMPONENTS OnnxParser)
 set(TRT_LIB TensorRT::NvInfer)
+if(NOT WIN32 AND TensorRT_LIBRARY)
+  get_filename_component(TensorRT_LIBRARY_DIR "${TensorRT_LIBRARY}" DIRECTORY)
+  if(TensorRT_LIBRARY_DIR)
+    set(CMAKE_EXE_LINKER_FLAGS
+        "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath-link,${TensorRT_LIBRARY_DIR}")
+    set(CMAKE_SHARED_LINKER_FLAGS
+        "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-rpath-link,${TensorRT_LIBRARY_DIR}")
+  endif()
+endif()
 
 get_filename_component(TRT_LLM_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR} PATH)
 
@@ -572,12 +581,19 @@ if(ENABLE_UCX)
     # error, thus using their installation script to isolate the installation
     # process until the issue is understood. And always trigger the build so
     # that change in USE_CXX11_ABI will not be ignored.
+    set(ucxx_cmake_args
+        "-DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=${USE_CXX11_ABI}"
+    )
+    if(DEFINED ucx_DIR)
+      set(ucxx_cmake_args "${ucxx_cmake_args} -Ducx_DIR=${ucx_DIR}")
+    endif()
     execute_process(
       COMMAND
-        ${CMAKE_COMMAND} -E env LIB_BUILD_DIR=${CMAKE_BINARY_DIR}/ucxx/build
+        ${CMAKE_COMMAND} -E env --unset=CONDA_PREFIX --unset=CONDA_BUILD
+        LIB_BUILD_DIR=${CMAKE_BINARY_DIR}/ucxx/build
+        INSTALL_PREFIX=${CMAKE_BINARY_DIR}/ucxx/build/install
         ${ucxx_source_dir}/build.sh libucxx -n
-        --cmake-args=\"-DBUILD_SHARED_LIBS=OFF
-        -DCMAKE_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=${USE_CXX11_ABI}\"
+        --cmake-args=\"${ucxx_cmake_args}\"
       OUTPUT_VARIABLE UCXX_BUILD_OUTPUT
       RESULT_VARIABLE UCXX_BUILD_RESULT)
     if(UCXX_BUILD_RESULT)

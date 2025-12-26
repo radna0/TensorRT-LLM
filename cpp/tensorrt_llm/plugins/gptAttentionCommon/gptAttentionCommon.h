@@ -49,6 +49,7 @@ public:
         int tp_rank,           // for ALiBi
         bool unfuse_qkv_gemm,  // for AutoPP
         bool use_logn_scaling, // for LognScaling
+        bool use_attention_sinks,
         tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
         tensorrt_llm::kernels::AttentionMaskType mask_type,
         tensorrt_llm::kernels::BlockSparseParams block_sparse_params, bool paged_kv_cache, int tokens_per_block,

@@ -171,6 +171,8 @@ class AttentionParams(object):
 
         self.host_context_progress = host_context_progress
 
+        self.attention_sinks = None
+
         # const parameters that will be reused by all layers.
         self.embed_positions = None
         self.rotary_inv_freq = None
@@ -781,6 +783,16 @@ class Attention(Module):
             attention_output_orig_quant_scale = attention_output_orig_quant_scale / 6.0
         return attention_output_orig_quant_scale
 
+    def _get_attention_sinks(self, attention_params):
+        attention_sinks = None
+        if attention_params is not None:
+            attention_sinks = getattr(attention_params, "attention_sinks", None)
+        if attention_sinks is None:
+            attention_sinks = getattr(self, "attention_sinks", None)
+            if hasattr(attention_sinks, "value"):
+                attention_sinks = attention_sinks.value
+        return attention_sinks
+
     def forward(
         self,
         hidden_states: Tensor,
@@ -1129,6 +1141,7 @@ class Attention(Module):
                 host_max_attention_window_sizes=kv_cache_params.
                 host_max_attention_window_sizes,
                 host_sink_token_length=kv_cache_params.host_sink_token_length,
+                attention_sinks=self._get_attention_sinks(attention_params),
                 context_lengths=attention_params.context_lengths,
                 cache_indirection=kv_cache_params.cache_indirection,
                 host_request_types=attention_params.host_request_types,
@@ -1943,6 +1956,7 @@ class CogVLMAttention(Attention):
                 host_max_attention_window_sizes=kv_cache_params.
                 host_max_attention_window_sizes,
                 host_sink_token_length=kv_cache_params.host_sink_token_length,
+                attention_sinks=self._get_attention_sinks(attention_params),
                 context_lengths=attention_params.context_lengths,
                 cache_indirection=kv_cache_params.cache_indirection,
                 host_request_types=attention_params.host_request_types,
@@ -2294,6 +2308,7 @@ class DeepseekV2Attention(Attention):
                 host_max_attention_window_sizes=kv_cache_params.
                 host_max_attention_window_sizes,
                 host_sink_token_length=kv_cache_params.host_sink_token_length,
+                attention_sinks=self._get_attention_sinks(attention_params),
                 context_lengths=attention_params.context_lengths,
                 cache_indirection=kv_cache_params.cache_indirection,
                 host_request_types=attention_params.host_request_types,

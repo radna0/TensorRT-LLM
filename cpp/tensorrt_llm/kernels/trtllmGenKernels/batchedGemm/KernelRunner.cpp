@@ -56,6 +56,11 @@ constexpr bool isSMCompatible(int gpuSM, SmVersion kernelSM)
     {
         return kernelSM == SmVersion::Sm90a;
     }
+    else if (gpuSM >= 120)
+    {
+        // Experimental: treat SM120+ as Blackwell-family kernels.
+        return kernelSM == SmVersion::Sm100f;
+    }
 
     TLLM_THROW("Unexpected gpuSM %d", gpuSM);
     return false;

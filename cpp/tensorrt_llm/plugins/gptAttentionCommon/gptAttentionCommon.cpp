@@ -37,6 +37,7 @@ GPTAttentionPluginCommon::GPTAttentionPluginCommon(int layer_idx, int num_heads,
     int tp_rank,           // for ALiBi
     bool unfuse_qkv_gemm,  // for AutoPP
     bool use_logn_scaling, // for LognScaling
+    bool use_attention_sinks,
     tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
     tensorrt_llm::kernels::AttentionMaskType mask_type, tensorrt_llm::kernels::BlockSparseParams block_sparse_params,
     bool paged_kv_cache, int tokens_per_block, nvinfer1::DataType type, int32_t max_context_length,
@@ -82,6 +83,7 @@ GPTAttentionPluginCommon::GPTAttentionPluginCommon(int layer_idx, int num_heads,
     mTpRank = tp_rank;
     mUnfuseQkvGemm = unfuse_qkv_gemm;
     mUseLognScaling = use_logn_scaling;
+    mUseAttentionSinks = use_attention_sinks;
     mMaxContextLength = max_context_length;
     mQKVBiasEnabled = qkv_bias_enabled;
     mCrossAttention = cross_attention;
@@ -135,6 +137,7 @@ GPTAttentionPluginCommon::GPTAttentionPluginCommon(void const* data, size_t leng
     read(d, mTpRank);
     read(d, mUnfuseQkvGemm);
     read(d, mUseLognScaling);
+    read(d, mUseAttentionSinks);
     read(d, mEnableContextFMHA);
     read(d, mFMHAForceFP32Acc);
     read(d, mMultiBlockMode);
@@ -216,7 +219,8 @@ size_t GPTAttentionPluginCommon::getCommonSerializationSize() const noexcept
         + sizeof(mTokensPerBlock) + sizeof(mType) + sizeof(mMaxContextLength) + sizeof(mQKVBiasEnabled)
         + sizeof(mCrossAttention) + sizeof(mMaxDistance) + sizeof(mPosShiftEnabled) + sizeof(mDenseContextFMHA)
         + sizeof(mPagedContextFMHA) + sizeof(mFP8ContextFMHA) + sizeof(mFP8AttenOutput) + sizeof(mHasFullAttentionMask)
-        + sizeof(mUseKVCache) + sizeof(mUnfuseQkvGemm) + sizeof(mUseLognScaling) + sizeof(mIsSpecDecodingEnabled)
+        + sizeof(mUseKVCache) + sizeof(mUnfuseQkvGemm) + sizeof(mUseLognScaling) + sizeof(mUseAttentionSinks)
+        + sizeof(mIsSpecDecodingEnabled)
         + sizeof(mUseSpecDecoding) + sizeof(mSpecDecodingIsGenerationLengthVariable)
         + sizeof(mSpecDecodingMaxGenerationLength) + sizeof(mNbMultiBlockSemaphores) + sizeof(mIsMLAEnabled)
         + sizeof(mMLAParams) + sizeof(mFuseFp4Quant) + sizeof(mSkipAttn)
@@ -250,6 +254,7 @@ void GPTAttentionPluginCommon::serializeCommon(void* buffer) const noexcept
     write(d, mTpRank);
     write(d, mUnfuseQkvGemm);
     write(d, mUseLognScaling);
+    write(d, mUseAttentionSinks);
     write(d, mEnableContextFMHA);
     write(d, mFMHAForceFP32Acc);
     write(d, mMultiBlockMode);
@@ -333,6 +338,7 @@ GPTAttentionPluginCreatorCommon::GPTAttentionPluginCreatorCommon()
     mPluginAttributes.emplace_back(PluginField("tp_rank", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(PluginField("unfuse_qkv_gemm", nullptr, PluginFieldType::kINT8));
     mPluginAttributes.emplace_back(PluginField("use_logn_scaling", nullptr, PluginFieldType::kINT8));
+    mPluginAttributes.emplace_back(PluginField("use_attention_sinks", nullptr, PluginFieldType::kINT8));
     mPluginAttributes.emplace_back(PluginField("context_fmha_type", nullptr, PluginFieldType::kINT8));
     mPluginAttributes.emplace_back(PluginField("kv_cache_quant_mode", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(PluginField("remove_input_padding", nullptr, PluginFieldType::kINT8));

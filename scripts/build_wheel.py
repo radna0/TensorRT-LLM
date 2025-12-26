@@ -40,6 +40,13 @@ except (ImportError, ModuleNotFoundError):
 build_run = partial(run, shell=True, check=True)
 
 
+def env_var_truthy(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
 @contextmanager
 def working_directory(path):
     """Changes working directory and returns to previous on exit."""
@@ -193,19 +200,25 @@ def setup_venv(project_dir: Path, requirements_file: Path,
                     f"Using the NVIDIA PyTorch container with PyPI distributed PyTorch may lead to compatibility issues."
                 )
 
-    # Install/update requirements
-    print(
-        f"-- Installing requirements from {requirements_file} into {venv_prefix}..."
-    )
-    build_run(f'"{venv_python}" -m pip install -r "{requirements_file}"')
+    skip_requirements = env_var_truthy("TRTLLM_SKIP_REQUIREMENTS")
+    if skip_requirements:
+        print(f"-- TRTLLM_SKIP_REQUIREMENTS set; skipping pip install for {requirements_file}")
+    else:
+        print(
+            f"-- Installing requirements from {requirements_file} into {venv_prefix}..."
+        )
+        build_run(f'"{venv_python}" -m pip install -r "{requirements_file}"')
 
-    venv_conan = setup_conan(scripts_dir, venv_python)
+    venv_conan = setup_conan(scripts_dir, venv_python, skip_requirements)
 
     return venv_python, venv_conan
 
 
-def setup_conan(scripts_dir, venv_python):
-    build_run(f'"{venv_python}" -m pip install conan==2.14.0')
+def setup_conan(scripts_dir, venv_python, skip_install: bool = False):
+    if skip_install:
+        print("-- TRTLLM_SKIP_REQUIREMENTS set; using existing conan install if present.")
+    else:
+        build_run(f'"{venv_python}" -m pip install conan==2.14.0')
     # Determine the path to the conan executable within the venv
     venv_conan = scripts_dir / "conan"
     if not venv_conan.exists():

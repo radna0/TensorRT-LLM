@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from ..speculative.interface import SpecMetadata
     from ..speculative.spec_tree_manager import SpecTreeManager
 
-from tensorrt_llm._utils import get_sm_version
+from tensorrt_llm._utils import get_sm_version, is_sm_100f
 from tensorrt_llm.bindings.internal import thop
 from tensorrt_llm.functional import AttentionMaskType
 from tensorrt_llm.llmapi import SkipSoftmaxAttentionConfig
@@ -1234,9 +1234,11 @@ class TrtllmAttentionMetadata(AttentionMetadata):
             device='cuda',
         )
         max_kv_len = self.kv_lens[:self.num_seqs].max()
-        assert self.kv_lens_cuda[:self.
-                                 num_seqs] >= self._seq_lens_cuda[:self.
-                                                                  num_seqs], "kv_lens should be greater than seq_lens,please run prepare() first"
+        assert torch.all(
+            self.kv_lens_cuda[:self.num_seqs] >=
+            self._seq_lens_cuda[:self.num_seqs]), (
+                "kv_lens should be greater than seq_lens, please run prepare() first"
+            )
 
         # Only support seq_lens are equal in one batch
         seq_lens_slice = self.seq_lens[:self.num_seqs]

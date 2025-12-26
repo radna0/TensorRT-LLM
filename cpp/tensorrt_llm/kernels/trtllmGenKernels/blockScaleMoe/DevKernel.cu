@@ -207,7 +207,7 @@ template <>
 struct KernelTraits<1>
 {
 #if CUDA_VERSION >= 12090
-    using MaxOp = cuda::maximum<>;
+    using MaxOp = cub::Max;
 #else
     using MaxOp = cub::Max;
 #endif
@@ -882,7 +882,7 @@ __global__ void finalizeDeepSeekKernel(KernelParams params)
             float constexpr E4m3MaxVal{448.f};
 
             // Compute the absolute max
-            float aMax = BlockReduce(temp_storage).Reduce(fabsf(acc), cuda::maximum<>());
+            float aMax = BlockReduce(temp_storage).Reduce(fabsf(acc), cub::Max());
 
             if (threadIdx.x == 0)
             {

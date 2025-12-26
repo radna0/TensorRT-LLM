@@ -34,10 +34,16 @@ execute_process(
   RESULT_VARIABLE _CUTLASS_LIBRARY_SUCCESS)
 
 if(NOT _CUTLASS_LIBRARY_SUCCESS EQUAL 0)
-  message(
-    FATAL_ERROR
-      "Failed to set up the CUTLASS library in ${cutlass_source_dir} due to"
-      " ${_CUTLASS_LIBRARY_SUCCESS}.")
+  execute_process(
+    WORKING_DIRECTORY ${cutlass_source_dir}/python/
+    COMMAND ${Python3_EXECUTABLE} setup_library.py install --user
+    RESULT_VARIABLE _CUTLASS_LIBRARY_INSTALL_SUCCESS)
+  if(NOT _CUTLASS_LIBRARY_INSTALL_SUCCESS EQUAL 0)
+    message(
+      FATAL_ERROR
+        "Failed to set up the CUTLASS library in ${cutlass_source_dir} due to"
+        " ${_CUTLASS_LIBRARY_INSTALL_SUCCESS}.")
+  endif()
 endif()
 
 set(GENERATE_KERNELS_SCRIPT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/python)

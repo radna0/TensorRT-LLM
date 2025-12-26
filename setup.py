@@ -50,7 +50,10 @@ def parse_requirements(filename: os.PathLike):
 
 def sanity_check():
     tensorrt_llm_path = Path(__file__).resolve().parent / "tensorrt_llm"
-    if not (tensorrt_llm_path / "bindings").exists():
+    bindings_dir = tensorrt_llm_path / "bindings"
+    has_binding_ext = any(tensorrt_llm_path.glob("bindings.*.so")) or any(
+        tensorrt_llm_path.glob("bindings.*.pyd"))
+    if not bindings_dir.exists() and not has_binding_ext:
         raise ImportError(
             'The `bindings` module does not exist. Please check the package integrity. '
             'If you are attempting to use the pip development mode (editable installation), '

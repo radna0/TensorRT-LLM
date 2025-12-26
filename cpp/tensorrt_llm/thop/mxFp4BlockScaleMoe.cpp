@@ -21,6 +21,7 @@
 #include <ATen/cuda/EmptyTensor.h>
 #include <ATen/ops/index_select.h>
 #include <c10/util/Exception.h>
+#include <cstdlib>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -33,6 +34,15 @@ namespace btg = batchedGemm::trtllm::gen;
 using tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::RoutingMethodType;
 using MoeRunnerType = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::MoE::Runner;
 using tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::computeSelectedTileN;
+
+namespace
+{
+bool allowTrtllmGenUnsupportedSm()
+{
+    char const* env = std::getenv("TRTLLM_GEN_ALLOW_UNSUPPORTED_SM");
+    return env && env[0] != '\0' && env[0] != '0';
+}
+} // namespace
 
 torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor> const& routing_logits,
     torch::optional<torch::Tensor> const& routing_bias, torch::Tensor const& hidden_states,
@@ -52,7 +62,9 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids,
     torch::optional<torch::Tensor> const& out_tensor)
 {
-    TORCH_CHECK(tensorrt_llm::common::isSM100Family(), "Only SM100f is supported by MXFP4 block scale MOE");
+    TORCH_CHECK(tensorrt_llm::common::isSM100Family() || allowTrtllmGenUnsupportedSm(),
+        "Only SM100f is supported by MXFP4 block scale MOE "
+        "(set TRTLLM_GEN_ALLOW_UNSUPPORTED_SM=1 to override).");
     TORCH_CHECK(tile_tokens_dim == 8 || tile_tokens_dim == 16 || tile_tokens_dim == 32 || tile_tokens_dim == 64
             || tile_tokens_dim == 128 || tile_tokens_dim == 256,
         "tile_tokens_dim must be 8, 16, 32, 64, 128, 256");

@@ -18,6 +18,7 @@
 #include "tensorrt_llm/runtime/torchUtils.h"
 #include "tensorrt_llm/thop/thUtils.h"
 #include <ATen/cuda/EmptyTensor.h>
+#include <cstdlib>
 
 TRTLLM_NAMESPACE_BEGIN
 
@@ -26,6 +27,15 @@ namespace torch_ext
 
 namespace btg = batchedGemm::trtllm::gen;
 using tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::RoutingMethodType;
+
+namespace
+{
+bool allowTrtllmGenUnsupportedSm()
+{
+    char const* env = std::getenv("TRTLLM_GEN_ALLOW_UNSUPPORTED_SM");
+    return env && env[0] != '\0' && env[0] != '0';
+}
+} // namespace
 
 torch::Tensor fp8_per_tensor_scale_moe_runner(torch::optional<torch::Tensor> const& routing_logits,
     torch::optional<torch::Tensor> const& routing_bias, torch::Tensor const& hidden_states,
@@ -38,7 +48,9 @@ torch::Tensor fp8_per_tensor_scale_moe_runner(torch::optional<torch::Tensor> con
     int64_t const tile_tokens_dim, int64_t const routing_method_type,
     torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids)
 {
-    TORCH_CHECK(tensorrt_llm::common::isSM100Family(), "Only SM100f is supported by FP8 block scale MOE");
+    TORCH_CHECK(tensorrt_llm::common::isSM100Family() || allowTrtllmGenUnsupportedSm(),
+        "Only SM100f is supported by FP8 block scale MOE "
+        "(set TRTLLM_GEN_ALLOW_UNSUPPORTED_SM=1 to override).");
     TORCH_CHECK(tile_tokens_dim == 8 || tile_tokens_dim == 16 || tile_tokens_dim == 32 || tile_tokens_dim == 64
             || tile_tokens_dim == 128 || tile_tokens_dim == 192 || tile_tokens_dim == 256,
         "tile_tokens_dim must be 8, 16, 32, 64, 128, 256");

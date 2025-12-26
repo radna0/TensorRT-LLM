@@ -5240,6 +5240,7 @@ def gpt_attention(
     host_past_key_value_lengths: Optional[Tensor],
     host_max_attention_window_sizes: Tensor,
     host_sink_token_length: Tensor,
+    attention_sinks: Optional[Tensor] = None,
     context_lengths: Optional[Tensor],
     cache_indirection: Optional[Tensor],
     host_request_types: Tensor,
@@ -5361,6 +5362,12 @@ def gpt_attention(
             by default, the max_attention_window_size is determined by the shape of cache_indir_table.
             And we support independent max_attention_window_size for each layer.
             This controls the sliding-window-attention kv-cache features.
+
+        host_sink_token_length: Tensor (On CPU)
+            An INT32 tensor of shape [1].
+
+        attention_sinks: Tensor (On GPU)
+            A float tensor with shape [num_heads] that adds a per-head sink term to the softmax denominator.
 
         context_lengths: Tensor (On GPU)
             The tensor that stores the context-phase sequence length of each request. Its shape
@@ -5826,6 +5833,10 @@ def gpt_attention(
     use_logn_scaling = trt.PluginField(
         "use_logn_scaling", np.array(np.int8(use_logn_scaling), dtype=np.int8),
         trt.PluginFieldType.INT8)
+    use_attention_sinks = trt.PluginField(
+        "use_attention_sinks",
+        np.array(np.int8(attention_sinks is not None), dtype=np.int8),
+        trt.PluginFieldType.INT8)
 
     pfc = trt.PluginFieldCollection([
         layer_idx, nheads, vision_start, vision_length, num_kv_heads,
@@ -5847,7 +5858,7 @@ def gpt_attention(
         spec_decoding_max_generation_length, is_mla_enabled, q_lora_rank,
         kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim,
         fuse_fp4_quant_pf, skip_attn_pf, cp_size, cp_rank, cp_group,
-        use_logn_scaling
+        use_logn_scaling, use_attention_sinks
     ])
 
     attn_plug = attn_plg_creator.create_plugin("causal_attn", pfc)
@@ -5865,14 +5876,22 @@ def gpt_attention(
             host_past_key_value_lengths,
             host_max_attention_window_sizes,
             host_sink_token_length,
+        ]
+    else:
+        plug_inputs += [
+            host_max_attention_window_sizes,
+            host_sink_token_length,
+        ]
+    if attention_sinks is not None:
+        plug_inputs += [attention_sinks]
+    if use_cache:
+        plug_inputs += [
             context_lengths,
             cache_indirection,
             host_request_types,
         ]
     else:
         plug_inputs += [
-            host_max_attention_window_sizes,
-            host_sink_token_length,
             context_lengths,
             host_request_types,
         ]
@@ -6599,6 +6618,7 @@ ACT2FN = {
     'squared-relu': squared_relu,
     'swiglu': swiglu,
     'fast-swiglu': swiglu,
+    'swiglu_bias': swiglu,
     'sigmoid': sigmoid,
     'quick_gelu': quick_gelu,
 }
@@ -6606,6 +6626,7 @@ ACT2FN = {
 GATED_ACT_2_ACT = {
     'swiglu': 'silu',
     'fast-swiglu': 'silu',
+    'swiglu_bias': 'silu',
     'geglu': 'gelu',
 }
 

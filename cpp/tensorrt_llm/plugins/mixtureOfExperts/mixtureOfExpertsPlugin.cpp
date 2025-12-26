@@ -37,7 +37,7 @@ using tensorrt_llm::plugins::write;
 using LoraImpl = tensorrt_llm::kernels::LoraImpl;
 using LoraParams = tensorrt_llm::kernels::LoraParams;
 
-static char const* MIXTURE_OF_EXPERTS_PLUGIN_VERSION{"1"};
+static char const* MIXTURE_OF_EXPERTS_PLUGIN_VERSION{"2"};
 static char const* MIXTURE_OF_EXPERTS_PLUGIN_NAME{"MixtureOfExperts"};
 nvinfer1::PluginFieldCollection MixtureOfExpertsPluginCreator::mFC{};
 std::vector<nvinfer1::PluginField> MixtureOfExpertsPluginCreator::mPluginAttributes;
@@ -324,6 +324,36 @@ void MixtureOfExpertsPlugin::init()
     {
         mMOERunner = switch_output_type<__nv_fp4_e2m1, true>(mOutputType);
     }
+#ifdef ENABLE_FP8
+    else if (mType == DataType::kFP8 && mWeightType == DataType::kFP4)
+    {
+        if (mOutputType == DataType::kHALF)
+        {
+            mMOERunner = std::make_unique<kernels::CutlassMoeFCRunner<__nv_fp8_e4m3, __nv_fp4_e2m1, half>>();
+        }
+#ifdef ENABLE_BF16
+        else if (mOutputType == DataType::kBF16)
+        {
+            mMOERunner
+                = std::make_unique<kernels::CutlassMoeFCRunner<__nv_fp8_e4m3, __nv_fp4_e2m1, __nv_bfloat16>>();
+        }
+#endif
+        else
+        {
+            TLLM_THROW("Invalid output type %d for FP8 x FP4 MoE", static_cast<int>(mOutputType));
+        }
+    }
+#endif
+    else if (mType == DataType::kHALF && mWeightType == DataType::kFP4)
+    {
+        mMOERunner = std::make_unique<kernels::CutlassMoeFCRunner<half, __nv_fp4_e2m1>>();
+    }
+#ifdef ENABLE_BF16
+    else if (mType == DataType::kBF16 && mWeightType == DataType::kFP4)
+    {
+        mMOERunner = std::make_unique<kernels::CutlassMoeFCRunner<__nv_bfloat16, __nv_fp4_e2m1>>();
+    }
+#endif
 #endif
 
     if (!mMOERunner)
@@ -411,6 +441,10 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
     {
         return inOut[pos].type == DataType::kINT32;
     }
+    else if (hasInputSf() && pos == getInputSfIndex())
+    {
+        return inOut[pos].type == DataType::kFP8 || inOut[pos].type == DataType::kINT8;
+    }
     else if (pos == getTokenFinalScalesIndex())
     {
         return inOut[pos].type == DataType::kFLOAT;
@@ -418,6 +452,11 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
     else if (pos == getExpertBias1Index() || pos == getExpertBias2Index())
     {
         return inOut[pos].type == mOutputType;
+    }
+    else if (hasSwigluParams()
+        && (pos == getSwigluAlphaIndex() || pos == getSwigluBetaIndex() || pos == getSwigluLimitIndex()))
+    {
+        return inOut[pos].type == DataType::kFLOAT;
     }
     else if (pos == nbInputs + getOutputTensorIndex())
     {
@@ -491,7 +530,8 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
     }
     else if ((hasFP4QuantScales() || hasGroupwiseFp8Alpha()) && pos == getInputTensorIndex())
     {
-        return inOut[pos].type == mOutputType;
+        auto const input_type = mType == nvinfer1::DataType::kFP8 ? mType : mOutputType;
+        return inOut[pos].type == input_type;
     }
     else
     {
@@ -695,21 +735,48 @@ QuantParams tensorrt_llm::plugins::MixtureOfExpertsPlugin::getQuantParams(nvinfe
         TLLM_CHECK(desc_5->dims.nbDims == 3);
         TLLM_CHECK(desc_6->dims.nbDims == 1);
         TLLM_CHECK(desc_1->dims.d[0] == 1);
-        TLLM_CHECK_WITH_INFO(desc_2->dims.d[0] == experts_per_node && desc_2->dims.d[1] == gated_inter_size
-                && desc_2->dims.d[2]
-                    == mExpertHiddenSize / TmaWarpSpecializedGroupedGemmInput::NVFP4BlockScaleVectorSize,
+
+        int const block_scale_vec_size = hasMxfp4QuantScales()
+            ? TmaWarpSpecializedGroupedGemmInput::MXFPXBlockScaleVectorSize
+            : TmaWarpSpecializedGroupedGemmInput::NVFP4BlockScaleVectorSize;
+
+        auto const pad_up = [](int x, int m) { return (x + m - 1) / m * m; };
+        int const fc_rows = pad_up(gated_inter_size, 128);
+        int const fc_cols = pad_up(mExpertHiddenSize / block_scale_vec_size, 4);
+        int const proj_rows = pad_up(mExpertHiddenSize, 128);
+        int const proj_cols = pad_up(mExpertInterSize / block_scale_vec_size, 4);
+
+        TLLM_CHECK_WITH_INFO(desc_2->dims.d[0] == experts_per_node && desc_2->dims.d[1] == fc_rows
+                && desc_2->dims.d[2] == fc_cols,
             "Incorrect shape for FP4 scale");
         TLLM_CHECK_WITH_INFO(desc_3->dims.d[0] == experts_per_node, "Incorrect shape for FP4 scale");
         TLLM_CHECK(desc_4->dims.d[0] == 1);
-        TLLM_CHECK_WITH_INFO(desc_5->dims.d[0] == experts_per_node && desc_5->dims.d[1] == mExpertHiddenSize
-                && desc_5->dims.d[2]
-                    == mExpertInterSize / TmaWarpSpecializedGroupedGemmInput::NVFP4BlockScaleVectorSize,
+        TLLM_CHECK_WITH_INFO(desc_5->dims.d[0] == experts_per_node && desc_5->dims.d[1] == proj_rows
+                && desc_5->dims.d[2] == proj_cols,
             "Incorrect shape for FP4 scale");
         TLLM_CHECK_WITH_INFO(desc_6->dims.d[0] == experts_per_node, "Incorrect shape for FP4 scale");
-        return QuantParams::FP4(static_cast<float const*>(scale_1),
-            static_cast<TmaWarpSpecializedGroupedGemmInput::ElementSF const*>(scale_2),
-            static_cast<float const*>(scale_3), static_cast<float const*>(scale_4),
-            static_cast<TmaWarpSpecializedGroupedGemmInput::ElementSF const*>(scale_5),
+
+        if (hasNvFp4QuantScales())
+        {
+            return QuantParams::FP4(static_cast<float const*>(scale_1),
+                static_cast<TmaWarpSpecializedGroupedGemmInput::ElementSF const*>(scale_2),
+                static_cast<float const*>(scale_3), static_cast<float const*>(scale_4),
+                static_cast<TmaWarpSpecializedGroupedGemmInput::ElementSF const*>(scale_5),
+                static_cast<float const*>(scale_6));
+        }
+
+        if (mQuantMode.hasW4a8Mxfp4Fp8())
+        {
+            return QuantParams::FP8MXFP4(static_cast<float const*>(scale_1),
+                static_cast<TmaWarpSpecializedGroupedGemmInput::MXFPXElementSF const*>(scale_2),
+                static_cast<float const*>(scale_3), static_cast<float const*>(scale_4),
+                static_cast<TmaWarpSpecializedGroupedGemmInput::MXFPXElementSF const*>(scale_5),
+                static_cast<float const*>(scale_6));
+        }
+
+        return QuantParams::MXFP8MXFP4(static_cast<TmaWarpSpecializedGroupedGemmInput::MXFPXElementSF const*>(scale_2),
+            static_cast<float const*>(scale_3),
+            static_cast<TmaWarpSpecializedGroupedGemmInput::MXFPXElementSF const*>(scale_5),
             static_cast<float const*>(scale_6));
     }
     return {};
@@ -931,6 +998,29 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
         );
     }
 
+    float const* swiglu_alpha = nullptr;
+    float const* swiglu_beta = nullptr;
+    float const* swiglu_limit = nullptr;
+    if (hasSwigluParams())
+    {
+        int const num_experts_on_rank = mNumExperts / mParallelismConfig.ep_size;
+        auto const& alpha_desc = inputDesc[getSwigluAlphaIndex()];
+        auto const& beta_desc = inputDesc[getSwigluBetaIndex()];
+        auto const& limit_desc = inputDesc[getSwigluLimitIndex()];
+        TLLM_CHECK(alpha_desc.dims.nbDims == 1);
+        TLLM_CHECK(beta_desc.dims.nbDims == 1);
+        TLLM_CHECK(limit_desc.dims.nbDims == 1);
+        TLLM_CHECK(alpha_desc.dims.d[0] == num_experts_on_rank);
+        TLLM_CHECK(beta_desc.dims.d[0] == num_experts_on_rank);
+        TLLM_CHECK(limit_desc.dims.d[0] == num_experts_on_rank);
+        swiglu_alpha = static_cast<float const*>(inputs[getSwigluAlphaIndex()]);
+        swiglu_beta = static_cast<float const*>(inputs[getSwigluBetaIndex()]);
+        swiglu_limit = static_cast<float const*>(inputs[getSwigluLimitIndex()]);
+    }
+    auto activation_params = hasSwigluParams()
+        ? ActivationParams(mActivationType, swiglu_alpha, swiglu_beta, swiglu_limit)
+        : ActivationParams(mActivationType);
+
     LoraParams lora_params{};
 
     if (hasLora())
@@ -957,13 +1047,16 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
     }
 
     MoeMinLatencyParams min_latency_params{};
+    void const* input_sf = hasInputSf() ? inputs[getInputSfIndex()] : nullptr;
+    // MXFP8 activation scales are produced in linear layout.
+    bool const swizzled_input_sf = !mQuantMode.hasW4a8Mxfp4Mxfp8();
     mMOERunner->setTactic(gemm1, gemm2);
 #ifdef USING_OSS_CUTLASS_MOE_GEMM
-    mMOERunner->runMoe(inputs[getInputTensorIndex()], nullptr, true,
+    mMOERunner->runMoe(inputs[getInputTensorIndex()], input_sf, swizzled_input_sf,
         static_cast<int const*>(inputs[getTokenSelectedExpertsIndex()]),
         hasFinalScales() ? static_cast<float const*>(inputs[getTokenFinalScalesIndex()]) : nullptr,
         inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr,
-        ActivationParams(mActivationType), inputs[getExpertWeights2Index()],
+        activation_params, inputs[getExpertWeights2Index()],
         hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens, num_tokens, mExpertHiddenSize,
         mExpertHiddenSize /*TRT does not support padding, safe to assume padded/unpadded hidden sizes are the same*/,
         mExpertInterSize, mNumExperts, mExpertsPerToken, static_cast<char*>(workspace.workspace),
@@ -972,11 +1065,11 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
         /*enable_alltoall=*/false, hasLora(), lora_params, /*use_deepseek_fp8_block_scale=*/false,
         /*min_latency_mode=*/false, min_latency_params, stream);
 #else
-    mMOERunner->runMoe(inputs[getInputTensorIndex()], nullptr, true,
+    mMOERunner->runMoe(inputs[getInputTensorIndex()], input_sf, swizzled_input_sf,
         static_cast<int const*>(inputs[getTokenSelectedExpertsIndex()]),
         hasFinalScales() ? static_cast<float const*>(inputs[getTokenFinalScalesIndex()]) : nullptr,
         inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr,
-        ActivationParams(mActivationType), inputs[getExpertWeights2Index()],
+        activation_params, inputs[getExpertWeights2Index()],
         hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens, num_tokens, mExpertHiddenSize,
         mExpertInterSize, mNumExperts, mExpertsPerToken, static_cast<char*>(workspace.workspace),
         // Outputs

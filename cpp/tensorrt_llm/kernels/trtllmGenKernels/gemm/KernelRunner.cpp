@@ -52,6 +52,10 @@ constexpr bool isSMCompatible(int gpuSM, SmVersion kernelSM)
     {
         return kernelSM == SmVersion::Sm90a;
     }
+    else if (gpuSM >= 120)
+    {
+        return kernelSM == SmVersion::Sm100a || kernelSM == SmVersion::Sm100f || kernelSM == SmVersion::Sm103a;
+    }
     return true;
 }
 

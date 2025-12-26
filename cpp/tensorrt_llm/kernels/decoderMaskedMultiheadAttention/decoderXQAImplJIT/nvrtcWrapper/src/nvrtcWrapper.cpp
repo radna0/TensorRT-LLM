@@ -17,6 +17,7 @@
 
 #include "tensorrt_llm/kernels/decoderMaskedMultiheadAttention/decoderXQAImplJIT/nvrtcWrapper/include/nvrtcWrapper.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <cuda.h>
 #include <nvPTXCompiler.h>
@@ -77,6 +78,59 @@ namespace
 {
 
 std::string gErrorString;
+
+bool isTwoStageCompilationDisabled()
+{
+    static bool const disabled = []()
+    {
+        char const* env = std::getenv("TRTLLM_XQA_JIT_DISABLE_TWO_STAGE");
+        return env != nullptr && env[0] == '1' && env[1] == '\0';
+    }();
+    return disabled;
+}
+
+std::string getEnvString(char const* name)
+{
+    char const* env = std::getenv(name);
+    if (env == nullptr || env[0] == '\0')
+    {
+        return {};
+    }
+    return std::string(env);
+}
+
+std::string getNvPtxErrorLog(nvPTXCompilerHandle compiler)
+{
+    size_t log_size = 0;
+    if (nvPTXCompilerGetErrorLogSize(compiler, &log_size) != NVPTXCOMPILE_SUCCESS || log_size <= 1)
+    {
+        return {};
+    }
+    std::string log;
+    log.resize(log_size);
+    if (nvPTXCompilerGetErrorLog(compiler, log.data()) != NVPTXCOMPILE_SUCCESS)
+    {
+        return {};
+    }
+    return log;
+}
+
+std::vector<std::string> getPtxCompilerGpuNames(int sm)
+{
+    std::vector<std::string> candidates;
+    if (sm == 120 || sm == 121)
+    {
+        std::string smStr = std::to_string(sm);
+        candidates.emplace_back("sm_" + smStr);
+        candidates.emplace_back("sm_" + smStr + "a");
+        candidates.emplace_back("sm_" + smStr + "f");
+    }
+    else
+    {
+        candidates.emplace_back("sm_" + std::to_string(sm));
+    }
+    return candidates;
+}
 
 void setErrorString(std::string const& errorString)
 {
@@ -309,6 +363,10 @@ tllmXqaJitStatus compileProgram(tllmXqaJitProgram prog)
 {
     bool needsTwoStageCompilation
         = (prog->context->sm == 120 || prog->context->sm == 121) && (prog->context->kernel_type == TLLM_XQA_JIT_HMMA);
+    if (needsTwoStageCompilation && isTwoStageCompilationDisabled())
+    {
+        needsTwoStageCompilation = false;
+    }
 
     if (needsTwoStageCompilation)
     {
@@ -350,20 +408,67 @@ tllmXqaJitStatus compileProgram(tllmXqaJitProgram prog)
         CHECK_NVRTC_ERROR(nvrtcGetPTX(prog->program, ptx_data.data()));
 
         // Stage 2: Compile PTX to cubin for sm_120 using nvPTXCompiler
-        nvPTXCompilerHandle ptx_compiler;
-        CHECK_NVPTX_ERROR(nvPTXCompilerCreate(&ptx_compiler, ptx_size, ptx_data.data()));
+        std::vector<std::string> gpu_names;
+        std::string const gpu_name_override = getEnvString("TRTLLM_XQA_JIT_PTX_GPU_NAME");
+        if (!gpu_name_override.empty())
+        {
+            gpu_names = {gpu_name_override};
+        }
+        else
+        {
+            gpu_names = getPtxCompilerGpuNames(prog->context->sm);
+        }
 
-        std::vector<char const*> ptx_compile_options = {"--gpu-name=sm_120f"};
-        CHECK_NVPTX_ERROR(nvPTXCompilerCompile(ptx_compiler, ptx_compile_options.size(), ptx_compile_options.data()));
+        std::vector<std::string> error_logs;
+        size_t cubin_size = 0;
+        bool compiled = false;
+        for (auto const& gpu_name : gpu_names)
+        {
+            nvPTXCompilerHandle ptx_compiler;
+            CHECK_NVPTX_ERROR(nvPTXCompilerCreate(&ptx_compiler, ptx_size, ptx_data.data()));
 
-        size_t cubin_size;
-        CHECK_NVPTX_ERROR(nvPTXCompilerGetCompiledProgramSize(ptx_compiler, &cubin_size));
+            std::string gpu_flag = "--gpu-name=" + gpu_name;
+            char const* ptx_compile_options[] = {gpu_flag.c_str()};
+            nvPTXCompileResult status = nvPTXCompilerCompile(ptx_compiler, 1, ptx_compile_options);
+            if (status == NVPTXCOMPILE_SUCCESS)
+            {
+                CHECK_NVPTX_ERROR(nvPTXCompilerGetCompiledProgramSize(ptx_compiler, &cubin_size));
 
-        prog->cubin_data.resize(cubin_size);
-        CHECK_NVPTX_ERROR(nvPTXCompilerGetCompiledProgram(ptx_compiler, prog->cubin_data.data()));
-        prog->use_stored_cubin = true;
+                prog->cubin_data.resize(cubin_size);
+                CHECK_NVPTX_ERROR(nvPTXCompilerGetCompiledProgram(ptx_compiler, prog->cubin_data.data()));
+                prog->use_stored_cubin = true;
 
-        CHECK_NVPTX_ERROR(nvPTXCompilerDestroy(&ptx_compiler));
+                CHECK_NVPTX_ERROR(nvPTXCompilerDestroy(&ptx_compiler));
+                compiled = true;
+                break;
+            }
+
+            std::ostringstream oss;
+            oss << "gpu-name=" << gpu_name << " status=" << static_cast<int>(status);
+            std::string log = getNvPtxErrorLog(ptx_compiler);
+            if (!log.empty())
+            {
+                oss << " log: " << log;
+            }
+            error_logs.push_back(oss.str());
+            CHECK_NVPTX_ERROR(nvPTXCompilerDestroy(&ptx_compiler));
+        }
+
+        if (!compiled)
+        {
+            std::ostringstream oss;
+            oss << "nvPTXCompiler failed for gpu-name candidates: ";
+            for (size_t i = 0; i < error_logs.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    oss << " | ";
+                }
+                oss << error_logs[i];
+            }
+            setErrorString(oss.str());
+            return TLLM_XQA_JIT_INTERNAL_ERROR;
+        }
 
 #ifndef NDEBUG
         printf("Two-stage compilation completed: PTX size=%zu, cubin size=%zu\n", ptx_size, cubin_size);

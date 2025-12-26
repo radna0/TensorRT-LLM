@@ -3053,6 +3053,7 @@ std::string AttentionOp::toString() const
     ss << "mRotaryEmbeddingMaxPositions: " << mRotaryEmbeddingMaxPositions << std::endl;
     ss << "mPositionEmbeddingType: " << static_cast<int>(mPositionEmbeddingType) << std::endl;
     ss << "mUseLognScaling: " << std::boolalpha << mUseLognScaling << std::endl;
+    ss << "mUseAttentionSinks: " << std::boolalpha << mUseAttentionSinks << std::endl;
     ss << "mRemovePadding: " << std::boolalpha << mRemovePadding << std::endl;
     ss << "mMaskType: " << static_cast<int>(mMaskType) << std::endl;
     ss << "mPagedKVCache: " << std::boolalpha << mPagedKVCache << std::endl;

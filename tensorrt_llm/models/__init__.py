@@ -40,6 +40,8 @@ from .gpt.config import GPTConfig
 from .gpt.model import GPTForCausalLM, GPTModel
 from .gptj.config import GPTJConfig
 from .gptj.model import GPTJForCausalLM, GPTJModel
+from .gpt_oss.config import GptOssConfig
+from .gpt_oss.model import GptOssForCausalLM
 from .gptneox.model import GPTNeoXForCausalLM, GPTNeoXModel
 from .grok.model import GrokForCausalLM
 from .llama.config import LLaMAConfig
@@ -98,6 +100,8 @@ __all__ = [
     'GPTJConfig',
     'GPTJModel',
     'GPTJForCausalLM',
+    'GptOssConfig',
+    'GptOssForCausalLM',
     'GPTNeoXModel',
     'GPTNeoXForCausalLM',
     'PhiModel',
@@ -159,6 +163,7 @@ MODEL_MAP = {
     'MambaForCausalLM': MambaForCausalLM,
     'GPTNeoXForCausalLM': GPTNeoXForCausalLM,
     'GPTJForCausalLM': GPTJForCausalLM,
+    'GptOssForCausalLM': GptOssForCausalLM,
     'MptForCausalLM': MPTForCausalLM,
     'MPTForCausalLM': MPTForCausalLM,
     'GLMModel': ChatGLMForCausalLM,

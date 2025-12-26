@@ -42,7 +42,7 @@ using namespace tensorrt_llm::common;
 using tensorrt_llm::plugins::GPTAttentionPluginCreator;
 using tensorrt_llm::plugins::GPTAttentionPlugin;
 
-static char const* GPT_ATTENTION_PLUGIN_VERSION{"1"};
+static char const* GPT_ATTENTION_PLUGIN_VERSION{"2"};
 static char const* GPT_ATTENTION_PLUGIN_NAME{"GPTAttention"};
 
 GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_start, int vision_length,
@@ -56,6 +56,7 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
     int tp_rank,                         // for ALiBi
     bool unfuse_qkv_gemm,                // for AutoPP
     bool use_logn_scaling,               // for LognScaling
+    bool use_attention_sinks,
     tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
     tensorrt_llm::kernels::AttentionMaskType mask_type, tensorrt_llm::kernels::BlockSparseParams block_sparse_params,
     bool paged_kv_cache, int tokens_per_block, nvinfer1::DataType type, int32_t max_context_length,
@@ -69,13 +70,14 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
         head_size, unidirectional, q_scaling, attn_logit_softcapping_scale, position_embedding_type,
         rotary_embedding_dim, rotary_embedding_base, rotary_embedding_scale_type, rotary_embedding_scale,
         rotary_embedding_short_m_scale, rotary_embedding_long_m_scale, rotary_embedding_max_positions,
-        rotary_embedding_original_max_positions, tp_size, tp_rank, unfuse_qkv_gemm, use_logn_scaling, context_fmha_type,
-        kv_cache_quant_mode, remove_input_padding, mask_type, block_sparse_params, paged_kv_cache, tokens_per_block,
-        type, max_context_length, qkv_bias_enabled, cross_attention, max_distance, pos_shift_enabled,
-        dense_context_fmha, use_paged_context_fmha, use_fp8_context_fmha, has_full_attention_mask, use_cache,
-        is_spec_decoding_enabled, spec_decoding_is_generation_length_variable, spec_decoding_max_generation_length,
-        is_mla_enabled, q_lora_rank, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, fuse_fp4_quant,
-        skip_attn, cp_size, cp_rank, cp_group)
+        rotary_embedding_original_max_positions, tp_size, tp_rank, unfuse_qkv_gemm, use_logn_scaling,
+        use_attention_sinks, context_fmha_type, kv_cache_quant_mode, remove_input_padding, mask_type,
+        block_sparse_params, paged_kv_cache, tokens_per_block, type, max_context_length, qkv_bias_enabled,
+        cross_attention, max_distance, pos_shift_enabled, dense_context_fmha, use_paged_context_fmha,
+        use_fp8_context_fmha, has_full_attention_mask, use_cache, is_spec_decoding_enabled,
+        spec_decoding_is_generation_length_variable, spec_decoding_max_generation_length, is_mla_enabled, q_lora_rank,
+        kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, fuse_fp4_quant, skip_attn, cp_size, cp_rank,
+        cp_group)
 {
     TLLM_CHECK_WITH_INFO(
         !is_mla_enabled, "GPTAttentionPlugin no longer supports MLA. Please use the PyTorch workflow instead.");
@@ -104,6 +106,7 @@ std::string GPTAttentionPlugin::toString(IdxEntry const& entry) const
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(HOST_PAST_KEY_VALUE_LENGTHS);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(HOST_MAX_ATTENTION_WINDOW);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(HOST_SINK_TOKEN_LENGTH);
+        TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(ATTENTION_SINKS);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(CONTEXT_LENGTHS);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(CACHE_INDIR);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(REQUEST_TYPES);
@@ -160,6 +163,7 @@ bool GPTAttentionPlugin::isEntryUsed(IdxEntry const& entry) const
     case IdxEntry::HOST_PAST_KEY_VALUE_LENGTHS: return useKVCache();
     case IdxEntry::HOST_MAX_ATTENTION_WINDOW: return true;
     case IdxEntry::HOST_SINK_TOKEN_LENGTH: return true;
+    case IdxEntry::ATTENTION_SINKS: return useAttentionSinks();
     case IdxEntry::CONTEXT_LENGTHS: return true;
     case IdxEntry::CACHE_INDIR: return useKVCache();
     case IdxEntry::REQUEST_TYPES: return true;
@@ -334,6 +338,11 @@ bool GPTAttentionPlugin::supportsFormatCombination(
     {
         posCaseLine = __LINE__;
         result = inOut[pos].type == nvinfer1::DataType::kINT32;
+    }
+    else if (useAttentionSinks() && pos == getIdx(IdxEntry::ATTENTION_SINKS))
+    {
+        posCaseLine = __LINE__;
+        result = inOut[pos].type == nvinfer1::DataType::kFLOAT && inOut[pos].format == TensorFormat::kLINEAR;
     }
     else if (isMRoPE() && (pos == getIdx(IdxEntry::MROPE_ROTARY_COS_SIN)))
     {
@@ -812,6 +821,9 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     int const cyclic_attention_window_size
         = isCrossAttention() ? max_encoder_context_len : cyclic_attention_window_sizes[mLayerIdx];
     int const sink_token_length = reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::HOST_SINK_TOKEN_LENGTH)])[0];
+    float const* attention_sinks = useAttentionSinks()
+        ? reinterpret_cast<float const*>(inputs[getIdx(IdxEntry::ATTENTION_SINKS)])
+        : nullptr;
     int const num_attn_layer = inputDesc[getIdx(IdxEntry::HOST_MAX_ATTENTION_WINDOW)].dims.d[0];
     int const max_cyclic_attention_window_size = isCrossAttention()
         ? max_encoder_context_len
@@ -981,6 +993,7 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     common_enqueue_params.attention_input = attention_input;
     common_enqueue_params.qkv_bias = qkv_bias;
     common_enqueue_params.attention_mask = attention_mask;
+    common_enqueue_params.attention_sinks = attention_sinks;
     common_enqueue_params.rotary_inv_freq = rotary_inv_freq;
     common_enqueue_params.rotary_cos_sin = rotary_cos_sin;
     common_enqueue_params.max_attention_window_size = max_attention_window_size;
@@ -1329,6 +1342,7 @@ IPluginV2* GPTAttentionPluginCreator::createPlugin(char const* name, PluginField
             static_cast<int32_t>(p.getScalar<int32_t>("tp_rank").value()),
             static_cast<bool>(p.getScalar<int8_t>("unfuse_qkv_gemm").value()),
             static_cast<bool>(p.getScalar<int8_t>("use_logn_scaling").value()),
+            static_cast<bool>(p.getScalar<int8_t>("use_attention_sinks").value()),
             static_cast<ContextFMHAType>(p.getScalar<int8_t>("context_fmha_type").value()),
             p.getScalar<int32_t>("kv_cache_quant_mode").value(),
             static_cast<bool>(p.getScalar<int8_t>("remove_input_padding").value()),

@@ -128,6 +128,7 @@ NCCLHelper& NCCLHelper::getInstance()
 NCCLHelper::NCCLHelper()
     : mLibraryHandle(nullptr)
     , mNCCLCommWindowRegister(nullptr)
+    , mNCCLCommWindowDeregister(nullptr)
     , mNCCLMemAlloc(nullptr)
     , mIsLoaded(false)
 {
@@ -176,12 +177,19 @@ void NCCLHelper::loadNCCLLibrary()
         // Load the required symbols
         mNCCLCommWindowRegister
             = reinterpret_cast<ncclCommWindowRegisterFunc>(getSymbolAddress(mLibraryHandle, "ncclCommWindowRegister"));
+        mNCCLCommWindowDeregister = reinterpret_cast<ncclCommWindowDeregisterFunc>(
+            getSymbolAddress(mLibraryHandle, "ncclCommWindowDeregister"));
 
         mNCCLMemAlloc = reinterpret_cast<ncclMemAllocFunc>(getSymbolAddress(mLibraryHandle, "ncclMemAlloc"));
 
         if (mNCCLCommWindowRegister == nullptr)
         {
             TLLM_LOG_WARNING("Failed to load ncclCommWindowRegister symbol, NCCL symmetric will not be supported.");
+        }
+
+        if (mNCCLCommWindowDeregister == nullptr)
+        {
+            TLLM_LOG_WARNING("Failed to load ncclCommWindowDeregister symbol, NCCL symmetric cleanup may be limited.");
         }
 
         if (mNCCLMemAlloc == nullptr)
@@ -231,6 +239,11 @@ void* NCCLHelper::getSymbolAddress(void* handle, char const* symbolName)
 NCCLHelper::ncclCommWindowRegisterFunc NCCLHelper::getNCCLCommWindowRegister()
 {
     return mNCCLCommWindowRegister;
+}
+
+NCCLHelper::ncclCommWindowDeregisterFunc NCCLHelper::getNCCLCommWindowDeregister()
+{
+    return mNCCLCommWindowDeregister;
 }
 
 NCCLHelper::ncclMemAllocFunc NCCLHelper::getNCCLMemAlloc()
@@ -531,6 +544,15 @@ void NCCLWindowAllocator::cleanupBuffersForComm(ncclComm_t comm) noexcept
             inUseCount, static_cast<void*>(comm));
     }
 
+    auto& ncclHelper = NCCLHelper::getInstance();
+    auto ncclCommWindowDeregisterFunc = ncclHelper.getNCCLCommWindowDeregister();
+    if (ncclCommWindowDeregisterFunc == nullptr)
+    {
+        TLLM_LOG_WARNING(
+            "[NCCLUtil] ncclCommWindowDeregister symbol not available, skipping window deregistration for comm %p",
+            static_cast<void*>(comm));
+    }
+
     for (auto& entry : commIt->second)
     {
         if (entry.buffer.isValid())
@@ -538,12 +560,12 @@ void NCCLWindowAllocator::cleanupBuffersForComm(ncclComm_t comm) noexcept
             // Deregister the window - the communicator is still valid at this point
             // (cleanup happens before ncclCommDestroy), but we need to be careful
             // if buffers are still in use by active operations
-            if (entry.buffer.window && comm)
+            if (entry.buffer.window && comm && ncclCommWindowDeregisterFunc != nullptr)
             {
                 // Note: Even if buffer is marked inUse, we must deregister since
                 // the communicator is being destroyed. The communicator is valid,
                 // but we should handle potential errors gracefully.
-                ncclResult_t result = ncclCommWindowDeregister(comm, entry.buffer.window);
+                ncclResult_t result = ncclCommWindowDeregisterFunc(comm, entry.buffer.window);
                 if (result != ncclSuccess)
                 {
                     TLLM_LOG_WARNING(

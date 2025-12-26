@@ -2016,6 +2016,7 @@ class Fp8RowwiseAttention(Module):
             host_max_attention_window_sizes=kv_cache_params.
             host_max_attention_window_sizes,
             host_sink_token_length=kv_cache_params.host_sink_token_length,
+            attention_sinks=getattr(attention_params, "attention_sinks", None),
             context_lengths=attention_params.context_lengths,
             cache_indirection=kv_cache_params.cache_indirection,
             host_request_types=attention_params.host_request_types,
@@ -2646,6 +2647,7 @@ class SmoothQuantAttention(Module):
                 host_max_attention_window_sizes=kv_cache_params.
                 host_max_attention_window_sizes,
                 host_sink_token_length=kv_cache_params.host_sink_token_length,
+                attention_sinks=getattr(attention_params, "attention_sinks", None),
                 context_lengths=attention_params.context_lengths,
                 cache_indirection=kv_cache_params.cache_indirection,
                 host_request_types=attention_params.host_request_types,
@@ -3168,6 +3170,7 @@ class QServeAttention(Module):
                 host_max_attention_window_sizes=kv_cache_params.
                 host_max_attention_window_sizes,
                 host_sink_token_length=kv_cache_params.host_sink_token_length,
+                attention_sinks=getattr(attention_params, "attention_sinks", None),
                 context_lengths=attention_params.context_lengths,
                 cache_indirection=kv_cache_params.cache_indirection,
                 host_request_types=attention_params.host_request_types,

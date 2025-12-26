@@ -3304,6 +3304,18 @@ class PyTorchModelEngine(ModelEngine):
                 new_tensors_device, cache_indirection_buffer,
                 num_accepted_tokens_device, req_id_to_old_request,
                 resource_manager)
+            if self.enable_spec_decode:
+                attn_metadata.update_spec_dec_param(
+                    batch_size=scheduled_requests.batch_size,
+                    is_spec_decoding_enabled=is_spec_dec_mode,
+                    is_spec_dec_tree=spec_metadata.is_spec_dec_tree,
+                    is_spec_dec_dynamic_tree=spec_metadata.is_spec_dec_dynamic_tree,
+                    max_draft_len=self.original_max_draft_len,
+                    max_total_draft_tokens=self.original_max_total_draft_tokens,
+                    model_is_wrapped=self.model_is_wrapped,
+                    spec_metadata=spec_metadata,
+                    spec_tree_manager=spec_tree_manager,
+                    spec_decoding_tensor=spec_decoding_tensor)
 
             with with_shared_pool(self.cuda_graph_runner.get_graph_pool()):
                 if not can_run_graph:
